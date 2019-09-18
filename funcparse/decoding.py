@@ -51,7 +51,7 @@ class TFActionSeqDecoder(torch.nn.Module):
         return {"loss": loss, "any_acc": elemacc, "seq_acc": seqacc}
 
 
-class LSTMCellTransition(torch.nn.Module):
+class LSTMCellTransition(TransitionModel):
     def __init__(self, *cells:torch.nn.LSTMCell, **kw):
         super(LSTMCellTransition, self).__init__(**kw)
         self.cells = torch.nn.ModuleList(cells)

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Union, Callable, List
+import numpy as np
 
 import torch
 
@@ -11,31 +12,64 @@ class Vocab(object):
     unktoken = "@UNK@"
     def __init__(self, padid:int=0, unkid:int=1, **kw):
         self.D = {self.padtoken: padid, self.unktoken: unkid}
-        self._RD = {v: k for k, v in self.D.items()}
+        self.counts = {k: np.infty for k in self.D.keys()}
+        self.rare_tokens = set()
+        self.rare_ids = set()
+        self.RD = {v: k for k, v in self.D.items()}
         self.growing = True
-
-    @property
-    def RD(self):
-        if self.growing is True:
-            self._RD = {v: k for k, v in self.D.items()}
-        else:
-            return self._RD
 
     def nextid(self):
         return max(self.D.values()) + 1
 
     def stopgrowth(self):
-        self.RD
         self.growing = False
+
+    def do_rare(self, min_freq:int=0, top_k:int=np.infty):
+        tokens_with_counts = self.counts.items()
+        if min_freq == 0 and top_k > len(tokens_with_counts):
+            self.rare_tokens = set()
+            self.rare_ids = set()
+            return
+
+        tokens_with_counts = sorted(tokens_with_counts, key=lambda x: x[1], reverse=True)
+        if top_k < len(tokens_with_counts) and tokens_with_counts[top_k][1] > min_freq:
+            i = top_k
+        else:
+            if top_k < len(tokens_with_counts):
+                tokens_with_counts = tokens_with_counts[:top_k]
+            # binary search for min_freq position
+            i = 0
+            divider = 2
+            where = +1
+            while True:
+                i += where * len(tokens_with_counts)//divider
+                if tokens_with_counts[i][1] == min_freq - 1 and tokens_with_counts[i-1][1] == min_freq:
+                    break   # found
+                elif tokens_with_counts[i][1] < min_freq:   # go up
+                    where = -1
+                elif tokens_with_counts[i][1] >= min_freq:   # go down
+                    where = +1
+                divider *= 2
+                divider = min(divider, len(tokens_with_counts))
+        nonrare = set([t[0] for t in tokens_with_counts[:i]])
+        self.rare_tokens = set(self.D.keys()) - nonrare
+        self.rare_ids = set([self[rare_token] for rare_token in self.rare_tokens])
+
+    def add_token(self, token, seen:Union[int,bool]=True):
+        if token not in self.D:
+            assert(self.growing)
+            if self.growing:
+                id = self.nextid()
+                self.D[token] = id
+                self.RD[id] = token
+                self.counts[token] = 0
+        if seen > 0:
+            self.counts[token] += float(seen)
 
     def __getitem__(self, item:str) -> int:
         if item not in self.D:
-            if self.growing:
-                id = self.nextid()
-                self.D[item] = id
-            else:
-                assert(self.unktoken in self.D)
-                item = self.unktoken
+            assert(self.unktoken in self.D)
+            item = self.unktoken
         id = self.D[item]
         return id
 
@@ -60,13 +94,23 @@ class Vocab(object):
             raise Exception("illegal argument")
 
 
+def try_vocab():
+    vocab = Vocab()
+    tokens = "a b c d e a b c d a b c a b a a a a b e d g m o i p p x x i i b b ai ai bi bi bb bb abc abg abh abf".split()
+    for t in tokens:
+        vocab.add_token(t)
+    vocab.do_rare(min_freq=2, top_k=15)
+    print(vocab.rare_tokens)
+    print(vocab.rare_ids)
+
+
 class VocabBuilder(ABC):
     @abstractmethod
-    def inc_build_vocab(self, x:str):
+    def inc_build_vocab(self, x:str, seen:bool=True):
         raise NotImplemented()
 
     @abstractmethod
-    def finalize_vocab(self):
+    def finalize_vocab(self, min_freq:int=0, top_k:int=np.infty):
         raise NotImplemented()
 
     @abstractmethod
@@ -81,14 +125,16 @@ class SentenceEncoder(VocabBuilder):
         self.vocab = vocab if vocab is not None else Vocab()
         self.vocab_final = False
         
-    def inc_build_vocab(self, x:str):
+    def inc_build_vocab(self, x:str, seen:bool=True):
         if not self.vocab_final:
             tokens = self.tokenizer(x)
-            ids = [self.vocab[token] for token in tokens]
+            for token in tokens:
+                self.vocab.add_token(token, seen=seen)
     
-    def finalize_vocab(self):
+    def finalize_vocab(self, min_freq:int=0, top_k:int=np.infty):
         self.vocab_final = True
         self.vocab.stopgrowth()
+        self.vocab.do_rare(min_freq=min_freq, top_k=top_k)
         
     def vocabs_finalized(self):
         return self.vocab_final
@@ -114,8 +160,8 @@ class FuncQueryEncoder(VocabBuilder):
 
         self.none_action = "[NONE]"
         self.start_action = "@START@"
-        self.vocab_actions[self.none_action]
-        self.vocab_actions[self.start_action]
+        self.vocab_actions.add_token(self.none_action, seen=np.infty)
+        self.vocab_actions.add_token(self.start_action, seen=np.infty)
 
         self.grammar = grammar
         self.sentence_encoder = sentence_encoder
@@ -127,34 +173,33 @@ class FuncQueryEncoder(VocabBuilder):
     def vocabs_finalized(self):
         return self.vocab_final
 
-    def inc_build_vocab(self, x:str):
-        pass
+    def inc_build_vocab(self, x:str, seen:bool=True):
+        if not self.vocab_final:
+            actions = self.grammar.actions_for(x, format=self.format)
+            self._add_to_vocabs(actions, seen=seen)
 
-    def finalize_vocab(self):
+    def _add_to_vocabs(self, actions:List[str], seen:bool=True):
+        for action in actions:
+            self.vocab_actions.add_token(action, seen=seen)
+            head, body = action.split(" -> ")
+            if head in self.string_types:
+                self.string_actions.add(action)
+            self.vocab_tokens.add_token(head, seen=seen)
+            body = body.split(" ")
+            body = [x for x in body if x not in ["::", "--"]]
+            for x in body:
+                self.vocab_tokens.add_token(x, seen=seen)
+
+    def finalize_vocab(self, min_freq:int=0, top_k:int=np.infty):
         for out_type, rules in self.grammar.rules_by_type.items():
-            for rule in rules:
-                self.vocab_actions[rule]
-                head, body = rule.split(" -> ")
-                if head in self.string_types:
-                    self.string_actions.add(rule)
-
-                self.vocab_tokens[head]
-                body = body.split(" ")
-                body = [x for x in body if x not in ["::", "--"]]
-                for x in body:
-                    self.vocab_tokens[x]
+            self._add_to_vocabs(rules, seen=False)
 
         self.vocab_tokens.stopgrowth()
         self.vocab_actions.stopgrowth()
 
         self.vocab_final = True
-
-    def grammar_actions_for(self, x:str):
-        assert(self.vocabs_finalized())
-        if x in self.grammar.rules_by_type:
-            return self.grammar.rules_by_type[x]
-        else:
-            return None
+        self.vocab_tokens.do_rare(min_freq=min_freq, top_k=top_k)
+        self.vocab_actions.do_rare(min_freq=min_freq, top_k=top_k)
 
     def convert(self, x:str, return_what="tensor"):     # "tensor", "ids", "actions", "tree"
         rets = [r.strip() for r in return_what.split(",")]
@@ -203,4 +248,5 @@ def try_func_query_encoder():
 
 
 if __name__ == '__main__':
-    try_func_query_encoder()
+    try_vocab()
+    # try_func_query_encoder()

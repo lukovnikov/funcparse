@@ -15,6 +15,7 @@ from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTran
 from funcparse.grammar import FuncGrammar, passtr_to_pas
 from funcparse.states import FuncTreeState, FuncTreeStateBatch
 from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder
+from funcparse.nn import TokenEmb
 
 
 def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
@@ -118,6 +119,7 @@ class GeoQueryDataset(object):
                  train_indexes:str="train_indexes.txt",
                  test_indexes:str="test_indexes.txt",
                  sentence_encoder:SentenceEncoder=None,
+                 min_freq:int=2,
                  **kw):
         super(GeoQueryDataset, self).__init__(**kw)
         self.data = {}
@@ -126,18 +128,19 @@ class GeoQueryDataset(object):
 
         inputs = [x.strip() for x in open(os.path.join(geoquery_path, questions_file), "r").readlines()]
         outputs = [x.strip() for x in open(os.path.join(geoquery_path, queries_file), "r").readlines()]
+        t_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, train_indexes), "r").readlines()])
+        x_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, test_indexes), "r").readlines()])
+
 
         # build input vocabulary
-        for inp in inputs:
-            self.sentence_encoder.inc_build_vocab(inp)
-        self.sentence_encoder.finalize_vocab()
+        for i, inp in enumerate(inputs):
+            self.sentence_encoder.inc_build_vocab(inp, seen=i in t_idxs)
+        self.sentence_encoder.finalize_vocab(min_freq=min_freq)
 
         self.grammar, preparsed_queries = build_type_grammar_from(outputs, inputs, sentence_encoder.tokenizer)
 
         self.query_encoder = FuncQueryEncoder(self.grammar, sentence_encoder=self.sentence_encoder, format="prolog")
 
-        t_idxs = [int(x.strip()) for x in open(os.path.join(geoquery_path, train_indexes), "r").readlines()]
-        x_idxs = [int(x.strip()) for x in open(os.path.join(geoquery_path, test_indexes), "r").readlines()]
 
         splits = [None] * len(inputs)
         for t_idx in t_idxs:
@@ -146,9 +149,9 @@ class GeoQueryDataset(object):
             splits[x_idx] = "test"
         assert(all([split != None for split in splits]))
 
-        for out in preparsed_queries:
-            self.query_encoder.inc_build_vocab(out)
-        self.query_encoder.finalize_vocab()
+        for i, out in enumerate(preparsed_queries):
+            self.query_encoder.inc_build_vocab(out, seen=i in t_idxs)
+        self.query_encoder.finalize_vocab(min_freq=min_freq)
 
         self.build_data(inputs, preparsed_queries, splits)
 
@@ -218,6 +221,17 @@ class PtrGenOutput(torch.nn.Module):
         actmask.index_fill_(0, self._inp_to_act, 1)
         self.register_buffer("_inp_actmask", actmask)
 
+        # rare actions
+        self.rare_token_ids = self.query_encoder.vocab_actions.rare_ids
+        rare_id = 1
+        if len(self.rare_token_ids) > 0:
+            out_map = torch.arange(self.query_encoder.vocab_actions.number_of_ids())
+            for rare_token_id in self.rare_token_ids:
+                out_map[rare_token_id] = rare_id
+            self.register_buffer("out_map", out_map)
+        else:
+            self.register_buffer("out_map", None)
+
     def build_copy_maps(self):      # TODO test
         str_action_re = re.compile(r"^<W>\*\s->\s'(.+)'\s--\s<W>\*$")
         string_action_vocab = {}
@@ -268,6 +282,8 @@ class PtrGenOutput(torch.nn.Module):
 
         # - generation probs
         gen_probs = self.gen_lin(x)
+        if self.out_map is not None:
+            gen_probs = gen_probs.index_select(1, self.out_map)
         if actionmask is not None:
             gen_probs = gen_probs + torch.log(actionmask.float())
         gen_probs = self.sm(gen_probs)
@@ -345,6 +361,8 @@ class BasicPtrGenModel(TransitionModel):
             acc = gold_actions == actions
             ret = (loss, acc, term_mask)
 
+            x.batched_states["prev_action"] = gold_actions
+
             # advance states
             for i, state in enumerate(x.states):
                 if not state.is_terminated:
@@ -353,6 +371,7 @@ class BasicPtrGenModel(TransitionModel):
                     state.apply_action(open_node, gold_action)
             return x, ret
         else:
+            x.batched_states["prev_action"] = actions
             _, actions_ptr_or_gen = ptr_or_gen.max(-1)
             _, ptr_positions = ptr_position_probs.max(-1)
             _, actions_gen = gen_probs.max(-1)
@@ -373,12 +392,19 @@ class BasicPtrGenModel(TransitionModel):
             return x
 
 
-def create_model(embdim=100, hdim=100, dropout=0., sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None):
+def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
+                 sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None):
     inpemb = torch.nn.Embedding(sentence_encoder.vocab.number_of_ids(), embdim, padding_idx=0)
-    encoder = PytorchSeq2SeqWrapper(torch.nn.LSTM(embdim, hdim, num_layers=1, bidirectional=True, batch_first=True, dropout=dropout))
-    decoder_emb = torch.nn.Embedding(query_encoder.vocab_actions.number_of_ids(), embdim, padding_idx=0)
-    decoder_rnn = torch.nn.LSTMCell(embdim, hdim * 2)
-    decoder_rnn = LSTMCellTransition(decoder_rnn)
+    inpemb = TokenEmb(inpemb, rare_token_ids=sentence_encoder.vocab.rare_ids, rare_id=1)
+    encoder = PytorchSeq2SeqWrapper(
+        torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
+                      dropout=dropout))
+    decoder_emb = torch.nn.Embedding(query_encoder.vocab_tokens.number_of_ids(), embdim, padding_idx=0)
+    decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_tokens.rare_ids, rare_id=1)
+    decoder_rnn = [torch.nn.LSTMCell(embdim, hdim * 2)]
+    for i in range(numlayers - 1):
+        decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
+    decoder_rnn = LSTMCellTransition(*decoder_rnn)
     decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
     attention = q.Attention()
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
@@ -387,12 +413,12 @@ def create_model(embdim=100, hdim=100, dropout=0., sentence_encoder:SentenceEnco
 
 
 def run(lr=0.001,
-        batsize=20,
-        epochs=10,
+        batsize=50,
+        epochs=20,
         embdim=100,
-        numsteps=3,
         numlayers=2,
         dropout=.1,
+        wreg=1e-6,
         cuda=False,
         gpu=0,
         ):
@@ -411,7 +437,7 @@ def run(lr=0.001,
     print("input graph")
     print(batch.batched_states)
 
-    tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout,
+    tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder)
 
     # # test
@@ -426,11 +452,13 @@ def run(lr=0.001,
     # print(out)
     # sys.exit()
 
+    print(dict(tfdecoder.named_parameters()).keys())
+
     losses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
 
     # 4. define optim
-    optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr)
+    optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # 6. define training function (using partial)
     trainepoch = partial(q.train_epoch, model=tfdecoder, dataloader=train_dl, optim=optim, losses=losses,
