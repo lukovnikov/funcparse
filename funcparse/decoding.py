@@ -54,7 +54,7 @@ class TFActionSeqDecoder(torch.nn.Module):
 class LSTMCellTransition(torch.nn.Module):
     def __init__(self, *cells:torch.nn.LSTMCell, **kw):
         super(LSTMCellTransition, self).__init__(**kw)
-        self.cells = cells
+        self.cells = torch.nn.ModuleList(cells)
 
     def forward(self, inp:torch.Tensor, states:Dict[str,torch.Tensor]):
         x = inp
