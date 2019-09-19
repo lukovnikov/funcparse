@@ -425,7 +425,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
 
 def run(lr=0.001,
         batsize=50,
-        epochs=100,
+        epochs=15,
         embdim=100,
         numlayers=2,
         dropout=.1,
@@ -481,6 +481,21 @@ def run(lr=0.001,
 
     # 7. run training
     q.run_training(run_train_epoch=trainepoch, run_valid_epoch=validepoch, max_epochs=epochs)
+
+    outs = q.eval_loop(tfdecoder, test_dl, device=device)
+    acc = 0
+    total = 0
+    for out_batch_dict in outs[0]:
+        out_batch = out_batch_dict["output"]
+        for state in out_batch.states:
+            inp_string = state.inp_string
+            gold_tree = state.gold_tree
+            pred_tree = state.out_tree
+            pred_actions = state.out_actions
+            acc += float(str(gold_tree) == str(pred_tree))
+            total += 1
+            print(f"{inp_string}\n - GOLD: {gold_tree}\n - PRED: {pred_tree}\n - SAME: {str(gold_tree) == str(pred_tree)}\n - ACTIONS: {pred_actions}")
+    print(f"{100.*acc/total} ({acc}/{total}")
 
 
 

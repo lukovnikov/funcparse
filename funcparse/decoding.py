@@ -48,7 +48,7 @@ class TFActionSeqDecoder(torch.nn.Module):
         elemacc = step_accs.float().sum() / mask.float().sum()
         seqacc = (step_accs.bool() | ~mask.bool()).all(-1).float().mean()
 
-        return {"loss": loss, "any_acc": elemacc, "seq_acc": seqacc}
+        return {"output": fsb, "loss": loss, "any_acc": elemacc, "seq_acc": seqacc}
 
 
 class LSTMCellTransition(TransitionModel):

@@ -141,7 +141,7 @@ class FuncTreeState(object):
             i = len(parent)
             new_sibl_node = AlignedActionTree(rule_sibltypes[0], [])
             parent.append(new_sibl_node)
-            self.open_nodes = [new_sibl_node] if new_sibl_node.label() in self.query_encoder.grammar.rules_by_type else [] \
+            self.open_nodes = ([new_sibl_node] if new_sibl_node.label() in self.query_encoder.grammar.rules_by_type else []) \
                                 + self.open_nodes
 
             if self.has_gold:
