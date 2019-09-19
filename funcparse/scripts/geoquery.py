@@ -346,6 +346,29 @@ class BasicPtrGenModel(TransitionModel):
         probs, ptr_or_gen, gen_probs, ptr_position_probs = self.out_lin(enc, x, alphas)
 
         _, actions = probs.max(-1)
+        _, actions_ptr_or_gen = ptr_or_gen.max(-1)
+        _, ptr_positions = ptr_position_probs.max(-1)
+        _, actions_gen = gen_probs.max(-1)
+
+        if (actions_ptr_or_gen == 1).any().item() == 1:
+            whut = 0
+
+        # predicted actions
+        predicted_actions = []
+        for i, (state, ptr_or_gen_e, gen_action_e, copy_action_e) \
+                in enumerate(zip(x.states,
+                                 list(actions_ptr_or_gen.cpu()),
+                                 list(actions_gen.cpu()),
+                                 list(ptr_positions.cpu()))):
+            if not state.is_terminated:
+                open_node = state.open_nodes[0]
+                if ptr_or_gen_e.item() == 0:  # gen
+                    action = state.query_encoder.vocab_actions(gen_action_e.item())
+                else:
+                    action = f"COPY[{copy_action_e}]"
+                predicted_actions.append(action)
+            else:
+                predicted_actions.append(state.query_encoder.none_action)
 
         if x.states[0].has_gold:    # compute loss and accuracies
             gold_actions = torch.zeros_like(actions)
@@ -372,23 +395,11 @@ class BasicPtrGenModel(TransitionModel):
             return x, ret
         else:
             x.batched_states["prev_action"] = actions
-            _, actions_ptr_or_gen = ptr_or_gen.max(-1)
-            _, ptr_positions = ptr_position_probs.max(-1)
-            _, actions_gen = gen_probs.max(-1)
-
-            # advance states
-            for i, (state, ptr_or_gen_e, gen_action_e, copy_action_e) \
-                    in enumerate(zip(x.states,
-                                     list(actions_ptr_or_gen.cpu()),
-                                     list(actions_gen.cpu()),
-                                     list(ptr_positions.cpu()))):
+            for action, state in zip(predicted_actions, x.states):
                 if not state.is_terminated:
-                    open_node = state.open_nodes[0]
-                    if ptr_or_gen_e.item() == 0:    # gen
-                        action = state.query_encoder.vocab_actions(gen_action_e.item())
-                    else:
-                        action = f"COPY[{copy_action_e}]"
                     state.apply_action(open_node, action)
+                else:
+                    assert(action == state.query_encoder.none_action)
             return x
 
 
@@ -414,7 +425,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
 
 def run(lr=0.001,
         batsize=50,
-        epochs=20,
+        epochs=100,
         embdim=100,
         numlayers=2,
         dropout=.1,

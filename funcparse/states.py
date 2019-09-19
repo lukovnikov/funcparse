@@ -170,6 +170,7 @@ class FuncTreeState(object):
         return node._align.action()
 
     def apply_action(self, node:AlignedActionTree, action:str):
+        self.out_actions.append(action)
         copyre = re.compile("COPY\[(\d+)\]")
         if copyre.match(action):
             self.copy_token(node, int(copyre.match(action).group(1)))
