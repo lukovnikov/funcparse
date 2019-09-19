@@ -404,7 +404,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     decoder_rnn = [torch.nn.LSTMCell(embdim, hdim * 2)]
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
-    decoder_rnn = LSTMCellTransition(*decoder_rnn)
+    decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
     decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
     attention = q.Attention()
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
@@ -432,10 +432,10 @@ def run(lr=0.001,
     test_dl = dls["test"]
     tt.tock("data loaded")
 
-    batch = next(iter(train_dl))
-    print(batch)
-    print("input graph")
-    print(batch.batched_states)
+    # batch = next(iter(train_dl))
+    # print(batch)
+    # print("input graph")
+    # print(batch.batched_states)
 
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder)

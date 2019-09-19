@@ -55,6 +55,16 @@ class FuncTreeState(object):
         self.nn_states = {"inp_tensor": self.inp_tensor} # put NN states here
         self.open_nodes = []
 
+    def make_copy(self):
+        ret = type(self)(self.inp_string, self.out_string, self.sentence_encoder, self.query_encoder)
+        return ret
+
+    def reset(self):
+        self.open_nodes = []
+        self.nn_states = {"inp_tensor": self.inp_tensor}
+        self.out_actions, self.out_tree = None, None
+        return self
+
     @property
     def is_terminated(self):
         return len(self.open_nodes) == 0
@@ -69,8 +79,10 @@ class FuncTreeState(object):
         return ret
 
     def start_decoding(self):
+        self.reset()
         start_type = self.query_encoder.grammar.start_type
         self.out_tree = AlignedActionTree(start_type, children=[])
+        self.out_actions = []
         self.open_nodes = [self.out_tree] + self.open_nodes
         # align to gold
         if self.has_gold:
@@ -95,6 +107,7 @@ class FuncTreeState(object):
 
             # replace label of tree
             node.set_label(rule_arg)
+            node.set_action(rule)
             self.open_nodes.pop(0)
 
             # align to gold
@@ -120,6 +133,7 @@ class FuncTreeState(object):
 
             # replace label of tree
             node.set_label(rule_arg)
+            node.set_action(rule)
             self.open_nodes.pop(0)
 
             # create new sibling node
@@ -136,6 +150,7 @@ class FuncTreeState(object):
 
         else:   # terminal
             node.set_label(body)
+            node.set_action(rule)
             self.open_nodes.pop(0)
 
     def copy_token(self, node:AlignedActionTree, inp_position:int):
@@ -238,7 +253,7 @@ def try_default_nn_sate_batcher():
 class FuncTreeStateBatch(StateBatch):
     def __init__(self, states:List[FuncTreeState], nn_batcher:NNStateBatcher=DefaultNNStateBatcher(), **kw):
         super(FuncTreeStateBatch, self).__init__(**kw)
-        self.states = [deepcopy(state) for state in states]
+        self.states = [state.make_copy() for state in states]
         self.batched_states = None
         self.nn_batcher = nn_batcher
         self.batch()
