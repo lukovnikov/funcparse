@@ -178,6 +178,9 @@ class FuncTreeState(object):
 
     def to(self, device):
         self.nn_states = q.recmap(self.nn_states, lambda x: x.to(device))
+        for k, v in self.__dict__.items():
+            if isinstance(v, torch.Tensor):
+                setattr(self, k, v.to(device))
         return self
 
     @classmethod

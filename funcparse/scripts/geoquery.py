@@ -318,9 +318,11 @@ class BasicPtrGenModel(TransitionModel):
         self.ce = q.CELoss(reduction="none", ignore_index=0, mode="probs")
 
     def forward(self, x:FuncTreeStateBatch):
+        # print(x.states[0].inp_tensor.device)
         if "ctx" not in x.batched_states:
             # encode input
             inptensor = x.batched_states["inp_tensor"]
+            print(inptensor.device)
             mask = inptensor != 0
             inpembs = self.inp_emb(inptensor)
             inpenc = self.inp_enc(inpembs, mask)
