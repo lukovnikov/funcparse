@@ -421,12 +421,13 @@ def run(lr=0.001,
         wreg=1e-6,
         cuda=False,
         gpu=0,
+        minfreq=2,
         ):
     tt = q.ticktock("script")
     ttt = q.ticktock("script")
     device = torch.device("cpu") if not cuda else torch.device("cuda", gpu)
     tt.tick("loading data")
-    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=lambda x: x.split()))
+    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=lambda x: x.split()), min_freq=minfreq)
     dls = get_dataloaders(ds, batsize=batsize)
     train_dl = dls["train"]
     test_dl = dls["test"]
