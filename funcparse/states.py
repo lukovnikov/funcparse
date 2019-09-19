@@ -49,9 +49,9 @@ class FuncTreeState(object):
         self.has_gold = False
         if out is not None:
             self.has_gold = True
-            self.gold_tensor, self.gold_tree = query_encoder.convert(out, return_what="tensor,tree")
+            self.gold_tensor, self.gold_tree, self.gold_actions = query_encoder.convert(out, return_what="tensor,tree,actions")
             assert(self.gold_tree.action() is not None)
-        self.out_actions, self.out_tree = None, None
+        self.out_actions, self.out_tree, self.out_rules, self.pred_actions, self.pred_rules = None, None, None, None, None
         self.nn_states = {"inp_tensor": self.inp_tensor} # put NN states here
         self.open_nodes = []
 
@@ -62,7 +62,7 @@ class FuncTreeState(object):
     def reset(self):
         self.open_nodes = []
         self.nn_states = {"inp_tensor": self.inp_tensor}
-        self.out_actions, self.out_tree = None, None
+        self.out_actions, self.out_tree, self.out_rules, self.pred_actions, self.pred_rules = None, None, None, None, None
         return self
 
     @property
@@ -83,12 +83,16 @@ class FuncTreeState(object):
         start_type = self.query_encoder.grammar.start_type
         self.out_tree = AlignedActionTree(start_type, children=[])
         self.out_actions = []
+        self.out_rules = []
+        self.pred_actions = []
+        self.pred_rules = []
         self.open_nodes = [self.out_tree] + self.open_nodes
         # align to gold
         if self.has_gold:
             self.out_tree._align = self.gold_tree
 
     def apply_rule(self, node:AlignedActionTree, rule:Union[str, int]):
+        self.out_rules.append(rule)
         assert(node == self.open_nodes[0])
         if isinstance(rule, str):
             ruleid = self.query_encoder.vocab_actions[rule]
@@ -170,7 +174,7 @@ class FuncTreeState(object):
         return node._align.action()
 
     def apply_action(self, node:AlignedActionTree, action:str):
-        self.out_actions.append(action)
+        # self.out_actions.append(action)
         copyre = re.compile("COPY\[(\d+)\]")
         if copyre.match(action):
             self.copy_token(node, int(copyre.match(action).group(1)))

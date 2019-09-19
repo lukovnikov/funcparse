@@ -364,9 +364,13 @@ class BasicPtrGenModel(TransitionModel):
                 open_node = state.open_nodes[0]
                 if ptr_or_gen_e.item() == 0:  # gen
                     action = state.query_encoder.vocab_actions(gen_action_e.item())
+                    _rule = action
                 else:
                     action = f"COPY[{copy_action_e}]"
+                    _rule = f"<W>* -> {state.inp_tokens[copy_action_e]} -- <W>*"
                 predicted_actions.append(action)
+                state.pred_actions.append(action)
+                state.pred_rules.append(_rule)
             else:
                 predicted_actions.append(state.query_encoder.none_action)
 
@@ -425,7 +429,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
 
 def run(lr=0.001,
         batsize=50,
-        epochs=15,
+        epochs=10,
         embdim=100,
         numlayers=2,
         dropout=.1,
@@ -433,6 +437,7 @@ def run(lr=0.001,
         cuda=False,
         gpu=0,
         minfreq=2,
+        fulltest=False,
         ):
     tt = q.ticktock("script")
     ttt = q.ticktock("script")
@@ -482,20 +487,19 @@ def run(lr=0.001,
     # 7. run training
     q.run_training(run_train_epoch=trainepoch, run_valid_epoch=validepoch, max_epochs=epochs)
 
-    outs = q.eval_loop(tfdecoder, test_dl, device=device)
-    acc = 0
-    total = 0
-    for out_batch_dict in outs[0]:
-        out_batch = out_batch_dict["output"]
-        for state in out_batch.states:
-            inp_string = state.inp_string
-            gold_tree = state.gold_tree
-            pred_tree = state.out_tree
-            pred_actions = state.out_actions
-            acc += float(str(gold_tree) == str(pred_tree))
-            total += 1
-            print(f"{inp_string}\n - GOLD: {gold_tree}\n - PRED: {pred_tree}\n - SAME: {str(gold_tree) == str(pred_tree)}\n - ACTIONS: {pred_actions}")
-    print(f"{100.*acc/total} ({acc}/{total}")
+    if fulltest:
+        outs = q.eval_loop(tfdecoder, test_dl, device=device)
+        acc = 0
+        total = 0
+        for out_batch_dict in outs[0]:
+            out_batch = out_batch_dict["output"]
+            for state in out_batch.states:
+                acc += float(state.pred_rules == state.gold_actions)
+                total += 1
+                if state.pred_actions != state.gold_actions:
+                    print(f"* {state.inp_string}\n - GOLD ACTIONS: {state.gold_actions}\n - PRED ACTIONS: {state.pred_actions}"
+                          f"\n - PRED RULES:   {state.pred_rules}")
+        print(f"{100.*acc/total} ({acc}/{total}")
 
 
 

@@ -181,6 +181,11 @@ class ActionTree(ParentedTree):
             return tree
 
 
+def action_seq_from_tree():
+    # depth first action sequence from action tree with actions attached
+    pass    # TODO
+
+
 class FuncGrammar(object):
     typere = re.compile("<([^>]+)>([\*\+]?)")
     def __init__(self, start_type:str, **kw):
