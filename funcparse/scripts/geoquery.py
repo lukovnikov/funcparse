@@ -446,6 +446,7 @@ def run(lr=0.001,
     # DONE: grad norm
     # TODO: beam search
     # TODO: different optimizer?
+    # TODO: lr scheduler
     tt = q.ticktock("script")
     ttt = q.ticktock("script")
     device = torch.device("cpu") if not cuda else torch.device("cuda", gpu)
@@ -487,7 +488,7 @@ def run(lr=0.001,
     optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # 6. define training function (using partial)
-    clipgradnorm = lambda: torch.nn.util.clip_grad_norm_(tfdecoder.parameters(), gradnorm)
+    clipgradnorm = lambda: torch.nn.utils.clip_grad_norm_(tfdecoder.parameters(), gradnorm)
     trainbatch = partial(q.train_batch, on_before_optim_step=[clipgradnorm])
     trainepoch = partial(q.train_epoch, model=tfdecoder, dataloader=train_dl, optim=optim, losses=losses,
                          _train_batch=trainbatch, device=device)
