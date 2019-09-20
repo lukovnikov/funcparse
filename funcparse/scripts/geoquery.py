@@ -430,7 +430,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     return dec
 
 
-def run(lr=0.01,
+def run(lr=0.001,
         batsize=20,
         epochs=30,
         embdim=100,
@@ -487,7 +487,7 @@ def run(lr=0.01,
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
 
     # 4. define optim
-    optim = torch.optim.RMSprop(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+    optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # 6. define training function (using partial)
     clipgradnorm = lambda: torch.nn.utils.clip_grad_norm_(tfdecoder.parameters(), gradnorm)
