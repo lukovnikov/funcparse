@@ -41,28 +41,37 @@ class FuncTreeState(object):
     State object containing
     """
     def __init__(self, inp:str, out:str,
-                 sentence_encoder:SentenceEncoder, query_encoder:FuncQueryEncoder, **kw):
+                 sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None, **kw):
         super(FuncTreeState, self).__init__(**kw)
         self.inp_string, self.out_string = inp, out
         self.sentence_encoder, self.query_encoder = sentence_encoder, query_encoder
-        self.inp_tensor, self.inp_tokens = sentence_encoder.convert(inp, return_what="tensor,tokens")
+        self.inp_tensor = None
+        if sentence_encoder is not None:
+            self.inp_tensor, self.inp_tokens = sentence_encoder.convert(inp, return_what="tensor,tokens")
         self.has_gold = False
         if out is not None:
             self.has_gold = True
-            self.gold_tensor, self.gold_tree, self.gold_actions = query_encoder.convert(out, return_what="tensor,tree,actions")
-            assert(self.gold_tree.action() is not None)
-        self.out_actions, self.out_tree, self.out_rules, self.pred_actions, self.pred_rules = None, None, None, None, None
-        self.nn_states = {"inp_tensor": self.inp_tensor} # put NN states here
+            if query_encoder is not None:
+                self.gold_tensor, self.gold_tree, self.gold_rules = query_encoder.convert(out, return_what="tensor,tree,actions")
+                assert(self.gold_tree.action() is not None)
+        self.out_tree = None
+        self.out_rules = None
+        if self.inp_tensor is not None:
+            self.nn_states = {"inp_tensor": self.inp_tensor} # put NN states here
         self.open_nodes = []
 
     def make_copy(self):
-        ret = type(self)(self.inp_string, self.out_string, self.sentence_encoder, self.query_encoder)
+        ret = type(self)(self.inp_string, self.out_string)
+        for k, v in self.__dict__.items():
+
+            ret.__dict__[k] = deepcopy(v) if k not in ["sentence_encoder", "query_encoder"] else v
         return ret
 
     def reset(self):
         self.open_nodes = []
         self.nn_states = {"inp_tensor": self.inp_tensor}
-        self.out_actions, self.out_tree, self.out_rules, self.pred_actions, self.pred_rules = None, None, None, None, None
+        self.out_tree = None
+        self.out_rules = None
         return self
 
     @property
@@ -82,14 +91,14 @@ class FuncTreeState(object):
         self.reset()
         start_type = self.query_encoder.grammar.start_type
         self.out_tree = AlignedActionTree(start_type, children=[])
-        self.out_actions = []
         self.out_rules = []
-        self.pred_actions = []
-        self.pred_rules = []
         self.open_nodes = [self.out_tree] + self.open_nodes
         # align to gold
         if self.has_gold:
             self.out_tree._align = self.gold_tree
+        # initialize prev_action
+        self.nn_states["prev_action"] = torch.tensor(self.query_encoder.vocab_actions[self.query_encoder.start_action],
+                                                     device=self.nn_states["inp_tensor"].device, dtype=torch.long)
 
     def apply_rule(self, node:AlignedActionTree, rule:Union[str, int]):
         self.out_rules.append(rule)

@@ -1,6 +1,7 @@
 from typing import Dict
 
 import torch
+import qelos as q
 
 from funcparse.states import FuncTreeStateBatch, StateBatch
 
@@ -12,6 +13,7 @@ class TFActionSeqDecoder(torch.nn.Module):
     def __init__(self, model:TransitionModel, **kw):
         super(TFActionSeqDecoder, self).__init__(**kw)
         self.model = model
+        self.loss = q.CELoss(reduction="none", ignore_index=0, mode="probs")
 
     def forward(self, fsb:FuncTreeStateBatch):
         states = fsb.unbatch()
@@ -29,13 +31,36 @@ class TFActionSeqDecoder(torch.nn.Module):
 
         # main loop
         while not all_terminated:
-            all_terminated = True
-            fsb, losses = self.model(fsb)
-            step_loss, step_acc, step_term = losses
+            probs, fsb = self.model(fsb)
+            states = fsb.unbatch()
+            # find gold rules
+            gold_rules = torch.zeros(probs.size(0), device=probs.device, dtype=torch.long)
+            term_mask = torch.zeros_like(gold_rules).float()
+            for i, state in enumerate(states):
+                if not state.is_terminated:
+                    open_node = state.open_nodes[0]
+                    gold_rules[i] = state.query_encoder.vocab_actions[state.get_gold_action_at(open_node)]
+                    term_mask[i] = 1
+            # compute loss
+            step_loss = self.loss(probs, gold_rules)
+            # compute accuracy
+            _, pred_rules = probs.max(-1)
+            step_acc = (pred_rules == gold_rules).float()
             step_losses.append(step_loss)
             step_accs.append(step_acc)
-            step_terms.append(step_term)
-            all_terminated = bool(torch.all(step_term == 0).item())
+            step_terms.append(term_mask)
+            all_terminated = bool(torch.all(term_mask == 0).item())
+
+            prev_actions_ = gold_rules
+            prev_actions = list(prev_actions_.cpu().numpy())
+            for i, (state, prev_action_id) in enumerate(zip(states, prev_actions)):
+                if not state.is_terminated:
+                    open_node = state.open_nodes[0]
+                    action = state.query_encoder.vocab_actions(prev_action_id)
+                    state.apply_action(open_node, action)
+                    state.nn_states["prev_action"] = prev_actions_[i]
+            fsb.batch()
+
 
         mask = torch.stack(step_terms, 0).transpose(1, 0)
         # aggregate losses
