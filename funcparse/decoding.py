@@ -42,7 +42,7 @@ class TFActionSeqDecoder(torch.nn.Module):
                     gold_rule_str = state.get_gold_action_at(open_node)
                     gold_rules[i] = state.query_encoder.vocab_actions[gold_rule_str]
                     term_mask[i] = 1
-                    state.apply_action(gold_rule_str)
+                    state.apply_action(open_node, gold_rule_str)
                     state.nn_states["prev_action"] = gold_rules[i]
             # compute loss
             step_loss = self.loss(probs, gold_rules)
