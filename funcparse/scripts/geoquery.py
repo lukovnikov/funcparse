@@ -438,7 +438,7 @@ def run(lr=0.001,
         cuda=False,
         gpu=0,
         minfreq=2,
-        gradnorm=3,
+        gradnorm=3.,
         fulltest=False,
         ):
     # DONE: Porter stemmer
