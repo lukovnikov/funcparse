@@ -22,7 +22,6 @@ class TFActionSeqDecoder(torch.nn.Module):
             state.start_decoding()
             numex += 1
 
-        fsb.batch()
         all_terminated = False
 
         step_losses = []
@@ -31,6 +30,7 @@ class TFActionSeqDecoder(torch.nn.Module):
 
         # main loop
         while not all_terminated:
+            fsb.batch()
             probs, fsb = self.model(fsb)
             states = fsb.unbatch()
             # find gold rules
@@ -39,8 +39,11 @@ class TFActionSeqDecoder(torch.nn.Module):
             for i, state in enumerate(states):
                 if not state.is_terminated:
                     open_node = state.open_nodes[0]
-                    gold_rules[i] = state.query_encoder.vocab_actions[state.get_gold_action_at(open_node)]
+                    gold_rule_str = state.get_gold_action_at(open_node)
+                    gold_rules[i] = state.query_encoder.vocab_actions[gold_rule_str]
                     term_mask[i] = 1
+                    state.apply_action(gold_rule_str)
+                    state.nn_states["prev_action"] = gold_rules[i]
             # compute loss
             step_loss = self.loss(probs, gold_rules)
             # compute accuracy
@@ -50,17 +53,6 @@ class TFActionSeqDecoder(torch.nn.Module):
             step_accs.append(step_acc)
             step_terms.append(term_mask)
             all_terminated = bool(torch.all(term_mask == 0).item())
-
-            prev_actions_ = gold_rules
-            prev_actions = list(prev_actions_.cpu().numpy())
-            for i, (state, prev_action_id) in enumerate(zip(states, prev_actions)):
-                if not state.is_terminated:
-                    open_node = state.open_nodes[0]
-                    action = state.query_encoder.vocab_actions(prev_action_id)
-                    state.apply_action(open_node, action)
-                    state.nn_states["prev_action"] = prev_actions_[i]
-            fsb.batch()
-
 
         mask = torch.stack(step_terms, 0).transpose(1, 0)
         # aggregate losses

@@ -245,7 +245,7 @@ class DefaultNNStateBatcher(NNStateBatcher):
     def unbatch(self, batched_nnstates:Dict[str, Union[torch.Tensor, Dict]]):
         rets = None
         for k, v in batched_nnstates.items():
-            splits = self.unbatch(v) if isinstance(v, dict) else v.split(1)
+            splits = self.unbatch(v) if isinstance(v, dict) else v.split(1, 0)
             if rets is None:
                 rets = []
                 for _ in splits:
@@ -282,7 +282,7 @@ class FuncTreeStateBatch(StateBatch):
     def unbatch(self):  # update state.g's from batched_graph
         nn_states = self.nn_batcher.unbatch(self.batched_states)
         for state, nn_state in zip(self.states, nn_states):
-            state.nn_state = nn_state
+            state.nn_states = nn_state
         return self.states
 
     def to(self, device):
