@@ -325,6 +325,7 @@ class BasicPtrGenModel(TransitionModel):
             inptensor = x.batched_states["inp_tensor"]
             mask = inptensor != 0
             inpembs = self.inp_emb(inptensor)
+            inpembs = self.dropout(inpembs)
             inpenc = self.inp_enc(inpembs, mask)
             x.batched_states["ctx"] = inpenc
             x.batched_states["ctx_mask"] = mask
@@ -340,7 +341,6 @@ class BasicPtrGenModel(TransitionModel):
 
         if "rnn" not in x.batched_states:
             x.batched_states["rnn"] = {}
-        emb = self.dropout(emb)
         enc = self.out_rnn(emb, x.batched_states["rnn"])
 
         alphas, summ, scores = self.att(enc, ctx, ctx_mask)
