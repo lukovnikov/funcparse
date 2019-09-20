@@ -8,6 +8,7 @@ import torch
 
 import qelos as q
 from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
+from nltk import PorterStemmer
 
 from torch.utils.data import DataLoader
 
@@ -367,7 +368,7 @@ class BasicPtrGenModel(TransitionModel):
                     _rule = action
                 else:
                     action = f"COPY[{copy_action_e}]"
-                    _rule = f"<W>* -> {state.inp_tokens[copy_action_e]} -- <W>*"
+                    _rule = f"<W>* -> '{state.inp_tokens[copy_action_e]}' -- <W>*"
                 predicted_actions.append(action)
                 state.pred_actions.append(action)
                 state.pred_rules.append(_rule)
@@ -421,29 +422,37 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
         decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
     decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
-    attention = q.Attention()
+    attention = q.Attention(q.SimpleFwdAttComp(hdim*2, hdim*2, hdim*2))
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
     dec = TFActionSeqDecoder(model)
     return dec
 
 
 def run(lr=0.001,
-        batsize=50,
-        epochs=10,
+        batsize=20,
+        epochs=30,
         embdim=100,
         numlayers=2,
-        dropout=.1,
+        dropout=.2,
         wreg=1e-6,
         cuda=False,
         gpu=0,
         minfreq=2,
+        gradnorm=3,
         fulltest=False,
         ):
+    # DONE: Porter stemmer
+    # DONE: linear attention
+    # DONE: grad norm
+    # TODO: beam search
+    # TODO: different optimizer?
     tt = q.ticktock("script")
     ttt = q.ticktock("script")
     device = torch.device("cpu") if not cuda else torch.device("cuda", gpu)
     tt.tick("loading data")
-    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=lambda x: x.split()), min_freq=minfreq)
+    stemmer = PorterStemmer()
+    tokenizer = lambda x: [stemmer.stem(xe) for xe in x.split()]
+    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=tokenizer), min_freq=minfreq)
     dls = get_dataloaders(ds, batsize=batsize)
     train_dl = dls["train"]
     test_dl = dls["test"]
@@ -478,8 +487,10 @@ def run(lr=0.001,
     optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # 6. define training function (using partial)
+    clipgradnorm = lambda: torch.nn.util.clip_grad_norm_(tfdecoder.parameters(), gradnorm)
+    trainbatch = partial(q.train_batch, on_before_optim_step=clipgradnorm)
     trainepoch = partial(q.train_epoch, model=tfdecoder, dataloader=train_dl, optim=optim, losses=losses,
-                         device=device)
+                         _train_batch=trainbatch, device=device)
 
     # 7. define validation function (using partial)
     validepoch = partial(q.test_epoch, model=tfdecoder, dataloader=test_dl, losses=vlosses, device=device)
@@ -496,10 +507,10 @@ def run(lr=0.001,
             for state in out_batch.states:
                 acc += float(state.pred_rules == state.gold_actions)
                 total += 1
-                if state.pred_actions != state.gold_actions:
+                if state.pred_rules != state.gold_actions:
                     print(f"* {state.inp_string}\n - GOLD ACTIONS: {state.gold_actions}\n - PRED ACTIONS: {state.pred_actions}"
                           f"\n - PRED RULES:   {state.pred_rules}")
-        print(f"{100.*acc/total} ({acc}/{total}")
+        print(f"{100.*acc/total:.3f} ({acc}/{total}")
 
 
 
