@@ -430,7 +430,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     return dec
 
 
-def run(lr=0.1,
+def run(lr=0.01,
         batsize=20,
         epochs=30,
         embdim=100,
