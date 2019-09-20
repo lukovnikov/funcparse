@@ -422,7 +422,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
         decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
     decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
-    attention = q.Attention(q.SimpleFwdAttComp(hdim*2, hdim*2, hdim*2))
+    attention = q.Attention(q.MatMulDotAttComp(hdim*2, hdim*2))
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
     dec = TFActionSeqDecoder(model)
     return dec
