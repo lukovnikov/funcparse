@@ -311,12 +311,13 @@ class PtrGenOutput(torch.nn.Module):
 
 
 class BasicPtrGenModel(TransitionModel):
-    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, **kw):
+    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., **kw):
         super(BasicPtrGenModel, self).__init__(**kw)
         self.inp_emb, self.inp_enc = inp_emb, inp_enc
         self.out_emb, self.out_rnn, self.out_lin = out_emb, out_rnn, out_lin
         self.att = att
         self.ce = q.CELoss(reduction="none", ignore_index=0, mode="probs")
+        self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x:FuncTreeStateBatch):
         if "ctx" not in x.batched_states:
@@ -339,6 +340,7 @@ class BasicPtrGenModel(TransitionModel):
 
         if "rnn" not in x.batched_states:
             x.batched_states["rnn"] = {}
+        emb = self.dropout(emb)
         enc = self.out_rnn(emb, x.batched_states["rnn"])
 
         alphas, summ, scores = self.att(enc, ctx, ctx_mask)
@@ -479,7 +481,7 @@ def run(lr=0.001,
     # print(out)
     # sys.exit()
 
-    print(dict(tfdecoder.named_parameters()).keys())
+    # print(dict(tfdecoder.named_parameters()).keys())
 
     losses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
