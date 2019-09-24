@@ -325,7 +325,7 @@ def run(lr=0.001,
         gpu=0,
         minfreq=2,
         gradnorm=3.,
-        beamsize=2,
+        beamsize=5,
         fulltest=False,
         ):
     # DONE: Porter stemmer

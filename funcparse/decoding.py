@@ -123,7 +123,7 @@ class BeamActionSeqDecoder(torch.nn.Module):
                         beam_probs, beam_batch = self.model(beam_batch)
                         beam_batch.unbatch()
                         beam_best_probs, beam_best_actions = (-torch.log(beam_probs)).topk(self.beamsize, -1, largest=False)
-                        out_beam_probs.append(beam_best_probs + best_probs[k:k+1])
+                        out_beam_probs.append(beam_best_probs + best_probs[:, k:k+1])
                         out_beam_batches.append([k]*self.beamsize)
                         out_beam_actions.append(beam_best_actions)
                     out_beam_probs = torch.cat(out_beam_probs, 1)
