@@ -92,7 +92,9 @@ class PtrGenOutput(torch.nn.Module):
             actionmask = torch.zeros(action_vocab.number_of_ids(), device=x.device, dtype=torch.uint8)
             if not state.is_terminated:
                 open_node = state.open_nodes[0]
-                if state.has_gold and not state.is_terminated:
+                if state.use_gold and not state.is_terminated:
+                    if state.get_gold_action_at(open_node) not in state.get_valid_actions_at(open_node):
+                        print(open_node, state.get_gold_action_at(open_node), state.get_valid_actions_at(open_node))
                     assert (state.get_gold_action_at(open_node) in state.get_valid_actions_at(open_node))
                 for valid_action in state.get_valid_actions_at(open_node):
                     actionmask[action_vocab[valid_action]] = 1

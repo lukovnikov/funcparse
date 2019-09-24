@@ -12,7 +12,7 @@ from nltk import PorterStemmer
 
 from torch.utils.data import DataLoader
 
-from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTransition
+from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTransition, BeamActionSeqDecoder
 from funcparse.grammar import FuncGrammar, passtr_to_pas
 from funcparse.states import FuncTreeState, FuncTreeStateBatch
 from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder
@@ -315,7 +315,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
 
 
 def run(lr=0.001,
-        batsize=20,
+        batsize=50,
         epochs=30,
         embdim=100,
         numlayers=2,
@@ -325,6 +325,7 @@ def run(lr=0.001,
         gpu=0,
         minfreq=2,
         gradnorm=3.,
+        beamsize=2,
         fulltest=False,
         ):
     # DONE: Porter stemmer
@@ -352,6 +353,7 @@ def run(lr=0.001,
 
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder)
+    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize)
 
     # # test
     # tt.tick("doing one epoch")
@@ -365,10 +367,12 @@ def run(lr=0.001,
     # print(out)
     # sys.exit()
 
+    # beamdecoder(next(iter(train_dl)))
+
     # print(dict(tfdecoder.named_parameters()).keys())
 
     losses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
-    vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["loss", "any_acc", "seq_acc"]]
+    vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["seq_acc", "tree_acc"]]
 
     # 4. define optim
     optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
@@ -380,7 +384,7 @@ def run(lr=0.001,
                          _train_batch=trainbatch, device=device)
 
     # 7. define validation function (using partial)
-    validepoch = partial(q.test_epoch, model=tfdecoder, dataloader=test_dl, losses=vlosses, device=device)
+    validepoch = partial(q.test_epoch, model=beamdecoder, dataloader=test_dl, losses=vlosses, device=device)
 
     # 7. run training
     tt.tick("training")

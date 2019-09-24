@@ -40,7 +40,7 @@ class FuncTreeState(object):
     """
     State object containing
     """
-    def __init__(self, inp:str, out:str,
+    def __init__(self, inp:str, out:str=None,
                  sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None, **kw):
         super(FuncTreeState, self).__init__(**kw)
         self.inp_string, self.out_string = inp, out
@@ -48,9 +48,12 @@ class FuncTreeState(object):
         self.inp_tensor = None
         if sentence_encoder is not None:
             self.inp_tensor, self.inp_tokens = sentence_encoder.convert(inp, return_what="tensor,tokens")
+
         self.has_gold = False
+        self.use_gold = False
         if out is not None:
             self.has_gold = True
+            self.use_gold = self.has_gold
             if query_encoder is not None:
                 self.gold_tensor, self.gold_tree, self.gold_rules = query_encoder.convert(out, return_what="tensor,tree,actions")
                 assert(self.gold_tree.action() is not None)
@@ -63,8 +66,8 @@ class FuncTreeState(object):
     def make_copy(self):
         ret = type(self)(self.inp_string, self.out_string)
         for k, v in self.__dict__.items():
-
             ret.__dict__[k] = deepcopy(v) if k not in ["sentence_encoder", "query_encoder"] else v
+        ret.open_nodes = ret.get_open_nodes()
         return ret
 
     def reset(self):
@@ -79,6 +82,8 @@ class FuncTreeState(object):
         return len(self.open_nodes) == 0
 
     def get_open_nodes(self, tree=None):
+        if self.out_tree is None and tree is None:
+            return []
         tree = tree if tree is not None else self.out_tree
         ret = []
         for child in tree:
@@ -94,13 +99,19 @@ class FuncTreeState(object):
         self.out_rules = []
         self.open_nodes = [self.out_tree] + self.open_nodes
         # align to gold
-        if self.has_gold:
+        if self.use_gold:
             self.out_tree._align = self.gold_tree
         # initialize prev_action
         self.nn_states["prev_action"] = torch.tensor(self.query_encoder.vocab_actions[self.query_encoder.start_action],
                                                      device=self.nn_states["inp_tensor"].device, dtype=torch.long)
 
     def apply_rule(self, node:AlignedActionTree, rule:Union[str, int]):
+        if node.label() not in self.query_encoder.grammar.rules_by_type \
+                or rule not in self.query_encoder.grammar.rules_by_type[node.label()]:
+            raise Exception("something wrong")
+            return
+        self.nn_states["prev_action"] = torch.ones_like(self.nn_states["prev_action"]) \
+                                        * self.query_encoder.vocab_actions[rule]
         self.out_rules.append(rule)
         assert(node == self.open_nodes[0])
         if isinstance(rule, str):
@@ -124,7 +135,7 @@ class FuncTreeState(object):
             self.open_nodes.pop(0)
 
             # align to gold
-            if self.has_gold:
+            if self.use_gold:
                 gold_children = node._align[:]
 
             # create children nodes as open non-terminals
@@ -132,7 +143,7 @@ class FuncTreeState(object):
                 child_node = AlignedActionTree(child, [])
                 node.append(child_node)
 
-                if self.has_gold:
+                if self.use_gold:
                     child_node._align = gold_children[i]
 
             # manage open nodes
@@ -157,7 +168,7 @@ class FuncTreeState(object):
             self.open_nodes = ([new_sibl_node] if new_sibl_node.label() in self.query_encoder.grammar.rules_by_type else []) \
                                 + self.open_nodes
 
-            if self.has_gold:
+            if self.use_gold:
                 gold_child = parent._align[i]
                 new_sibl_node._align = gold_child
 
@@ -179,7 +190,7 @@ class FuncTreeState(object):
             return [self.query_encoder.none_action]
 
     def get_gold_action_at(self, node:AlignedActionTree):
-        assert(self.has_gold)
+        assert(self.use_gold)
         return node._align.action()
 
     def apply_action(self, node:AlignedActionTree, action:str):
@@ -293,6 +304,14 @@ class FuncTreeStateBatch(StateBatch):
 
     def __len__(self):
         return len(self.states)
+
+    def make_copy(self):
+        ret = type(self)(self.states, self.nn_batcher)
+        return ret
+
+    def new(self, states:List[FuncTreeState]):
+        ret = type(self)(states, nn_batcher=self.nn_batcher)
+        return ret
 
 
 if __name__ == '__main__':
