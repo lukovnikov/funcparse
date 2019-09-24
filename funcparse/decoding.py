@@ -11,10 +11,13 @@ class TransitionModel(torch.nn.Module): pass
 
 
 class TFActionSeqDecoder(torch.nn.Module):
-    def __init__(self, model:TransitionModel, **kw):
+    def __init__(self, model:TransitionModel, smoothing=0., **kw):
         super(TFActionSeqDecoder, self).__init__(**kw)
         self.model = model
-        self.loss = q.CELoss(reduction="none", ignore_index=0, mode="probs")
+        if smoothing > 0:
+            self.loss = q.SmoothedCELoss(reduction="none", ignore_index=0, mode="probs")
+        else:
+            self.loss = q.CELoss(reduction="none", ignore_index=0, mode="probs")
 
     def forward(self, fsb:FuncTreeStateBatch):
         states = fsb.unbatch()

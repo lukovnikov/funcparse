@@ -295,7 +295,8 @@ class BasicPtrGenModel(TransitionModel):
 
 
 def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
-                 sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None):
+                 sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None,
+                 smoothing:float=0.,):
     inpemb = torch.nn.Embedding(sentence_encoder.vocab.number_of_ids(), embdim, padding_idx=0)
     inpemb = TokenEmb(inpemb, rare_token_ids=sentence_encoder.vocab.rare_ids, rare_id=1)
     encoder = PytorchSeq2SeqWrapper(
@@ -310,7 +311,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
     attention = q.Attention(q.MatMulDotAttComp(hdim*2, hdim*2))
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
-    dec = TFActionSeqDecoder(model)
+    dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
 
 
@@ -325,7 +326,8 @@ def run(lr=0.001,
         gpu=0,
         minfreq=2,
         gradnorm=3.,
-        beamsize=5,
+        beamsize=1,
+        smoothing=0.,
         fulltest=False,
         ):
     # DONE: Porter stemmer
@@ -352,7 +354,8 @@ def run(lr=0.001,
     # print(batch.batched_states)
 
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
-                             sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder)
+                             sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
+                             smoothing=smoothing)
     beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize)
 
     # # test
