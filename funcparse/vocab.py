@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Union, Callable, List
+from typing import Union, Callable, List, Dict
 import numpy as np
 
 import torch
@@ -7,7 +7,11 @@ import torch
 from funcparse.grammar import FuncGrammar
 
 
-class Vocab(object):
+class _Vocab(object):
+    pass
+
+
+class Vocab(_Vocab):
     padtoken = "@PAD@"
     unktoken = "@UNK@"
     def __init__(self, padid:int=0, unkid:int=1, **kw):
@@ -92,6 +96,21 @@ class Vocab(object):
             return item in self.RD
         else:
             raise Exception("illegal argument")
+
+
+class FixedVocab(Vocab):
+    def __init__(self, padid:int=0, unkid:int=1, vocab:Dict=None, **kw):
+        super(FixedVocab, self).__init__(padid, unkid, **kw)
+        self.D = vocab
+        self.growing = False
+
+    def add_token(self, token, seen=True):
+        print("Warning: trying to add token to fixed vocab")
+        pass
+
+    def do_rare(self, min_freq=0, top_k=np.infty):
+        print("Warning: trying to do rare on fixed vocab")
+        pass
 
 
 def try_vocab():

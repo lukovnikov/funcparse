@@ -9,21 +9,22 @@ import torch
 import qelos as q
 from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
 from nltk import PorterStemmer
+from pytorch_pretrained_bert import BertTokenizer, BertModel
 
 from torch.utils.data import DataLoader
 
 from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTransition, BeamActionSeqDecoder
 from funcparse.grammar import FuncGrammar, passtr_to_pas
 from funcparse.states import FuncTreeState, FuncTreeStateBatch
-from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder
+from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder, FixedVocab
 from funcparse.nn import TokenEmb, PtrGenOutput
 
 
-def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
+def build_type_grammar_from(outputs:List[str], inputs:List[str], sentence_encoder):
     # get all predicates, terminals and words from queries
     # example inputs: and(wife(president(US), BO), wife(president(countryid('united states')))
     g = FuncGrammar("<R>")
-    # DONETODO: IMPORTANT (BREAKING): can not allow rules of the forms <R> -> <W>* <W>* or <R> -> <W>* <R>, rules may only contain a single argument if it is of sibling type (*)
+    # DONE: IMPORTANT (BREAKING): can not allow rules of the forms <R> -> <W>* <W>* or <R> -> <W>* <R>, rules may only contain a single argument if it is of sibling type (*)
     g.add_rule("<R> -> cityid :: <CITYNAME> <CITYSTATE>")
     g.add_rule("<CITYNAME> -> cityname :: <W>*")
     g.add_rule("<CITYSTATE> -> citystate :: <W>*")
@@ -56,7 +57,7 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
             treestr = f"{x[0]}({', '.join([', '.join(subtree) for subtree in subtrees])})"
             return rettype, [treestr]
         elif x[0] == "'" and x[-1] == "'":   # string
-            tokens = tokenizer(x[1:-1])
+            tokens = sentence_encoder.tokenizer(x[1:-1])
             for token in tokens:
                 rule = f"<W>* -> '{token}' -- <W>*"
                 g.add_rule(rule)
@@ -77,10 +78,11 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
     g.add_rule("<W>* -> @W:END@")
 
     # get all words from questions
-    for question in inputs:
-        tokens = tokenizer(question)
-        for token in tokens:
-            rule = f"<W>* -> '{token}' -- <W>*"
+    for k, v in sentence_encoder.vocab.D.items():
+        if k[0] == "[" and k[-1] == "]" and len(k) > 2:
+            pass
+        else:
+            rule = f"<W>* -> '{k}' -- <W>*"
             g.add_rule(rule)
     return g, pre_parsed_queries
 
@@ -127,18 +129,18 @@ class GeoQueryDataset(object):
 
         self.sentence_encoder = sentence_encoder
 
-        inputs = [x.strip() for x in open(os.path.join(geoquery_path, questions_file), "r").readlines()]
+        inputs = [f"[CLS] {x.strip()} [SEP]" for x in open(os.path.join(geoquery_path, questions_file), "r").readlines()]
         outputs = [x.strip() for x in open(os.path.join(geoquery_path, queries_file), "r").readlines()]
         t_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, train_indexes), "r").readlines()])
         x_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, test_indexes), "r").readlines()])
 
+        # No need to build input vocab
+        # # build input vocabulary
+        # for i, inp in enumerate(inputs):
+        #     self.sentence_encoder.inc_build_vocab(inp, seen=i in t_idxs)
+        # self.sentence_encoder.finalize_vocab(min_freq=min_freq)
 
-        # build input vocabulary
-        for i, inp in enumerate(inputs):
-            self.sentence_encoder.inc_build_vocab(inp, seen=i in t_idxs)
-        self.sentence_encoder.finalize_vocab(min_freq=min_freq)
-
-        self.grammar, preparsed_queries = build_type_grammar_from(outputs, inputs, sentence_encoder.tokenizer)
+        self.grammar, preparsed_queries = build_type_grammar_from(outputs, inputs, sentence_encoder)
 
         self.query_encoder = FuncQueryEncoder(self.grammar, sentence_encoder=self.sentence_encoder, format="prolog")
 
@@ -175,7 +177,12 @@ class GeoQueryDataset(object):
 def try_dataset():
     tt = q.ticktock("dataset")
     tt.tick("building dataset")
-    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=lambda x: x.split()))
+    berttok = BertTokenizer.from_pretrained("bert-base-uncased")
+    bertvocab = FixedVocab(padid=berttok.vocab["[PAD]"],
+                           unkid=berttok.vocab["[UNK]"],
+                           vocab=berttok.vocab)
+    tokenizer = lambda x: berttok.tokenize(x)
+    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=tokenizer, vocab=bertvocab))
     tt.tock("dataset built")
 
 
@@ -199,10 +206,10 @@ def get_dataloaders(ds:GeoQueryDataset, batsize:int=5):
     return dls
 
 
-class BasicPtrGenModel(TransitionModel):
-    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., **kw):
-        super(BasicPtrGenModel, self).__init__(**kw)
-        self.inp_emb, self.inp_enc = inp_emb, inp_enc
+class BertPtrGenModel(TransitionModel):
+    def __init__(self, bert, out_emb, out_rnn, out_lin, att, dropout=0., **kw):
+        super(BertPtrGenModel, self).__init__(**kw)
+        self.bert = bert
         self.out_emb, self.out_rnn, self.out_lin = out_emb, out_rnn, out_lin
         self.att = att
         # self.ce = q.CELoss(reduction="none", ignore_index=0, mode="probs")
@@ -213,10 +220,8 @@ class BasicPtrGenModel(TransitionModel):
             # encode input
             inptensor = x.batched_states["inp_tensor"]
             mask = inptensor != 0
-            inpembs = self.inp_emb(inptensor)
-            inpembs = self.dropout(inpembs)
-            inpenc = self.inp_enc(inpembs, mask)
-            x.batched_states["ctx"] = inpenc
+            inpenc = self.bert(inptensor, attention_mask=mask)
+            x.batched_states["ctx"] = inpenc[0][-1]
             x.batched_states["ctx_mask"] = mask
 
         ctx = x.batched_states["ctx"]
@@ -294,23 +299,19 @@ class BasicPtrGenModel(TransitionModel):
             return x
 
 
-def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
+def create_model(embdim=768, hdim=100, dropout=0., numlayers:int=1,
                  sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None,
                  smoothing:float=0.,):
-    inpemb = torch.nn.Embedding(sentence_encoder.vocab.number_of_ids(), embdim, padding_idx=0)
-    inpemb = TokenEmb(inpemb, rare_token_ids=sentence_encoder.vocab.rare_ids, rare_id=1)
-    encoder = PytorchSeq2SeqWrapper(
-        torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
-                      dropout=dropout))
+    bert = BertModel.from_pretrained("bert-base-uncased")
     decoder_emb = torch.nn.Embedding(query_encoder.vocab_tokens.number_of_ids(), embdim, padding_idx=0)
     decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_tokens.rare_ids, rare_id=1)
     decoder_rnn = [torch.nn.LSTMCell(embdim, hdim * 2)]
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
-    attention = q.Attention(q.MatMulDotAttComp(hdim*2, hdim*2))
-    model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
+    decoder_out = PtrGenOutput(hdim*2+embdim, sentence_encoder, query_encoder)
+    attention = q.Attention(q.MatMulDotAttComp(hdim*2, embdim))
+    model = BertPtrGenModel(bert, decoder_emb, decoder_rnn, decoder_out, attention)
     dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
 
@@ -318,7 +319,8 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
 def run(lr=0.001,
         batsize=50,
         epochs=30,
-        embdim=100,
+        embdim=768,
+        hdim=100,
         numlayers=2,
         dropout=.2,
         wreg=1e-6,
@@ -340,9 +342,12 @@ def run(lr=0.001,
     ttt = q.ticktock("script")
     device = torch.device("cpu") if not cuda else torch.device("cuda", gpu)
     tt.tick("loading data")
-    stemmer = PorterStemmer()
-    tokenizer = lambda x: [stemmer.stem(xe) for xe in x.split()]
-    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=tokenizer), min_freq=minfreq)
+    berttok = BertTokenizer.from_pretrained("bert-base-uncased")
+    bertvocab = FixedVocab(padid=berttok.vocab["[PAD]"],
+                           unkid=berttok.vocab["[UNK]"],
+                           vocab=berttok.vocab)
+    tokenizer = lambda x: berttok.tokenize(x)
+    ds = GeoQueryDataset(sentence_encoder=SentenceEncoder(tokenizer=tokenizer, vocab=bertvocab))
     dls = get_dataloaders(ds, batsize=batsize)
     train_dl = dls["train"]
     test_dl = dls["test"]
@@ -353,7 +358,7 @@ def run(lr=0.001,
     # print("input graph")
     # print(batch.batched_states)
 
-    tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
+    tfdecoder = create_model(embdim=embdim, hdim=hdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing)
     beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize)

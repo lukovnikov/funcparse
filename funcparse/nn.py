@@ -71,7 +71,9 @@ class PtrGenOutput(torch.nn.Module):
             if str_action_re.match(k):
                 string_action_vocab[str_action_re.match(k).group(1)] = v
         for k, inp_v in self.sentence_encoder.vocab:
-            if k[0] == "@" and k[-1] == "@":
+            if k[0] == "@" and k[-1] == "@" and len(k) > 2:
+                pass
+            elif k[0] == "[" and k[-1] == "]" and len(k) > 2:
                 pass
             else:
                 # assert (k in self.qgb.vocab_actions)
