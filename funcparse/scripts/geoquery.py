@@ -329,7 +329,7 @@ def run(lr=0.001,
         beamsize=1,
         smoothing=0.,
         fulltest=False,
-        cosine_restarts=2.,
+        cosine_restarts=-1.,
         ):
     # DONE: Porter stemmer
     # DONE: linear attention
