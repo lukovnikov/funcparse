@@ -356,7 +356,7 @@ def run(lr=0.001,
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing)
-    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize)
+    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
 
     # # test
     # tt.tick("doing one epoch")

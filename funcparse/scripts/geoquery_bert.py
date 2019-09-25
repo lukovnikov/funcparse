@@ -361,7 +361,7 @@ def run(lr=0.001,
     tfdecoder = create_model(embdim=embdim, hdim=hdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing)
-    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize)
+    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
 
     # # test
     # tt.tick("doing one epoch")
@@ -388,7 +388,7 @@ def run(lr=0.001,
     otherparams = [allparams[k] for k in allparams.keys() if not re.match("^model\.bert.+", k)]
     print(len(bertparams))
     params = [
-        {"params": bertparams, "lr": lr * 0.1},
+        {"params": bertparams, "lr": lr * 0.05},
         {"params": otherparams}
     ]
     optim = q.AdamW(params, lr=lr, weight_decay=wreg)
