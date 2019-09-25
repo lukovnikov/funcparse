@@ -315,7 +315,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     return dec
 
 
-def run(lr=0.001,
+def run(lr=0.1,
         batsize=50,
         epochs=30,
         embdim=100,
@@ -378,7 +378,7 @@ def run(lr=0.001,
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["seq_acc", "tree_acc"]]
 
     # 4. define optim
-    optim = q.AdamW(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+    optim = torch.optim.SGD(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # lr schedule
     if cosine_restarts >= 0:
