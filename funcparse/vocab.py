@@ -189,6 +189,25 @@ class FuncQueryEncoder(VocabBuilder):
 
         self.string_actions = set()
 
+        # prebuild valid action masks
+        self._valid_action_mask_by_type = {}
+
+    def prebuild_valid_action_masks(self):
+        for typestr, rules in self.grammar.rules_by_type.items():
+            action_mask = torch.zeros(self.vocab_actions.number_of_ids(), dtype=torch.uint8)
+            for rule in rules:
+                action_mask[self.vocab_actions[rule]] = 1
+            self._valid_action_mask_by_type[typestr] = action_mask
+        # self._valid_action_mask_by_type["_@unk@_"] = torch.tensor(self.vocab_actions.number_of_ids(), dtype=torch.uint8)
+
+    def get_action_mask_for(self, typ:str):
+        if typ in self._valid_action_mask_by_type:
+            return self._valid_action_mask_by_type[typ]
+        else:
+            ret = torch.zeros(self.vocab_actions.number_of_ids(), dtype=torch.uint8)
+            ret[self.vocab_actions[self.none_action]] = 1
+            return ret
+
     def vocabs_finalized(self):
         return self.vocab_final
 
@@ -219,6 +238,8 @@ class FuncQueryEncoder(VocabBuilder):
         self.vocab_final = True
         self.vocab_tokens.do_rare(min_freq=min_freq, top_k=top_k)
         self.vocab_actions.do_rare(min_freq=min_freq, top_k=top_k)
+
+        self.prebuild_valid_action_masks()
 
     def convert(self, x:str, return_what="tensor"):     # "tensor", "ids", "actions", "tree"
         rets = [r.strip() for r in return_what.split(",")]

@@ -189,6 +189,11 @@ class FuncTreeState(object):
         else:
             return [self.query_encoder.none_action]
 
+    def get_valid_action_mask_at(self, node:AlignedActionTree):
+        node_label = node.label()
+        ret = self.query_encoder.get_action_mask_for(node_label)
+        return ret
+
     def get_gold_action_at(self, node:AlignedActionTree):
         assert(self.use_gold)
         return node._align.action()
