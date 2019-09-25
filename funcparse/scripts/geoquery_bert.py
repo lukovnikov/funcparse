@@ -383,7 +383,15 @@ def run(lr=0.001,
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["seq_acc", "tree_acc"]]
 
     # 4. define optim
-    optim = q.AdamW(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+    allparams = dict(tfdecoder.named_parameters())
+    bertparams = [allparams[k] for k in allparams.keys() if re.match("^model\.bert.+", k)]
+    otherparams = [allparams[k] for k in allparams.keys() if not re.match("^model\.bert.+", k)]
+    print(len(bertparams))
+    params = [
+        {"params": bertparams, "lr": lr * 0.1},
+        {"params": otherparams}
+    ]
+    optim = q.AdamW(params, lr=lr, weight_decay=wreg)
 
     # lr schedule
     if cosine_restarts >= 0:
