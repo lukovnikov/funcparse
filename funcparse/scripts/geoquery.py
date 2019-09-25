@@ -329,6 +329,7 @@ def run(lr=0.001,
         beamsize=1,
         smoothing=0.,
         fulltest=False,
+        cosine_restarts=2.,
         ):
     # DONE: Porter stemmer
     # DONE: linear attention
@@ -378,13 +379,22 @@ def run(lr=0.001,
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["seq_acc", "tree_acc"]]
 
     # 4. define optim
-    optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+    optim = q.AdamW(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+
+    # lr schedule
+    if cosine_restarts >= 0:
+        t_max = epochs * len(train_dl)
+        print(f"Total number of updates: {t_max} ({epochs} * {len(train_dl)})")
+        lr_schedule = q.WarmupCosineWithHardRestartsSchedule(optim, 0, t_max, cycles=cosine_restarts)
+        reduce_lr = [lambda: lr_schedule.step()]
+    else:
+        reduce_lr = []
 
     # 6. define training function (using partial)
     clipgradnorm = lambda: torch.nn.utils.clip_grad_norm_(tfdecoder.parameters(), gradnorm)
     trainbatch = partial(q.train_batch, on_before_optim_step=[clipgradnorm])
     trainepoch = partial(q.train_epoch, model=tfdecoder, dataloader=train_dl, optim=optim, losses=losses,
-                         _train_batch=trainbatch, device=device)
+                         _train_batch=trainbatch, device=device, on_end=reduce_lr)
 
     # 7. define validation function (using partial)
     validepoch = partial(q.test_epoch, model=beamdecoder, dataloader=test_dl, losses=vlosses, device=device)
