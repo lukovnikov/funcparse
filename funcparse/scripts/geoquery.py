@@ -304,12 +304,12 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
                       dropout=dropout))
     decoder_emb = torch.nn.Embedding(query_encoder.vocab_tokens.number_of_ids(), embdim, padding_idx=0)
     decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_tokens.rare_ids, rare_id=1)
-    decoder_rnn = [torch.nn.LSTMCell(embdim, hdim * 2)]
+    decoder_rnn = [torch.nn.LSTMCell(embdim, hdim)]
     for i in range(numlayers - 1):
-        decoder_rnn.append(torch.nn.LSTMCell(hdim * 2, hdim * 2))
+        decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim*4, sentence_encoder, query_encoder)
-    attention = q.Attention(q.MatMulDotAttComp(hdim*2, hdim*2))
+    decoder_out = PtrGenOutput(hdim*3, sentence_encoder, query_encoder)
+    attention = q.Attention(q.MatMulDotAttComp(hdim, hdim*2))
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
     dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
