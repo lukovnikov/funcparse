@@ -74,10 +74,12 @@ def passtr_to_pas(x:str):
     strings in query must be surrounded by single quotes (') and may NOT contain single quotes
     :return:
     """
+    nameless_func = "@NAMELESS@"
     tokens = re.split("([\(\),'])", x)
 
     stack = [[]]
     curstring = None
+    next_is_sibling = False
     for _token in tokens:
         if curstring is not None:
             curstring += _token
@@ -87,18 +89,24 @@ def passtr_to_pas(x:str):
         else:
             token = _token.strip()
             if token == "(":  # open new frame on stack
+                if next_is_sibling:
+                    stack[-1].append(nameless_func)
                 stack.append([])
+                next_is_sibling = False
             elif token == ")":  # close last frame on stack
                 popped = stack.pop(-1)
                 stack[-1][-1] = (stack[-1][-1], popped)
+                next_is_sibling = False
             elif token == ",":  # add sibling
-                pass
+                next_is_sibling = True
             elif token == "" or token == " ":
                 pass
             elif token == "'":
                 curstring = token
+                next_is_sibling = False
             else:
                 stack[-1].append(token)
+                next_is_sibling = False
 
     assert (len(stack) == 1)  # if everything parsed correctly, only one tree left on stack
     assert (len(stack[-1]) == 1)

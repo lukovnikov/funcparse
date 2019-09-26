@@ -24,15 +24,17 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
     # example inputs: and(wife(president(US), BO), wife(president(countryid('united states')))
     g = FuncGrammar("<R>")
     # DONETODO: IMPORTANT (BREAKING): can not allow rules of the forms <R> -> <W>* <W>* or <R> -> <W>* <R>, rules may only contain a single argument if it is of sibling type (*)
-    g.add_rule("<R> -> cityid :: <CITYNAME> <CITYSTATE>")
-    g.add_rule("<CITYNAME> -> cityname :: <W>*")
-    g.add_rule("<CITYSTATE> -> citystate :: <W>*")
+    g.add_rule("<R> -> _cityid :: <CITYNAME> <CITYSTATE>")
+    g.add_rule("<CITYNAME> -> _cityname :: <W>*")
+    g.add_rule("<CITYSTATE> -> _citystate :: <W>*")
     def _rec_process_pas(x):
         if isinstance(x, tuple):    # parent
-            if x[0] == "cityid":
-                cityname = ("cityname", [x[1][0]])
-                citystate = ("citystate", [x[1][1] if x[1][1] != "_" else f"'_'"])
+            if x[0] == "_cityid":
+                cityname = ("_cityname", [x[1][0]])
+                citystate = ("_citystate", [x[1][1]])
                 x = (x[0], [cityname, citystate])
+            if x[0] == "@NAMELESS@":
+                x = ("and", x[1])
             b = [_rec_process_pas(a) for a in x[1]]
             child_types, subtrees = zip(*b)
             rule_exists = False
@@ -55,18 +57,18 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
                 g.add_rule(rule)
             treestr = f"{x[0]}({', '.join([', '.join(subtree) for subtree in subtrees])})"
             return rettype, [treestr]
-        elif x[0] == "'" and x[-1] == "'":   # string
-            tokens = tokenizer(x[1:-1])
+        elif x in set("A B C D E F G H I J K L".split()):   # variables
+            rule = f"<V> -> {x}"
+            g.add_rule(rule)
+            return "<V>", [f"{x}"]
+        else:  # string entities
+            if x[0] == "'" and x[-1] == "'" and len(x) > 2:
+                x = x[1:-1]
+            tokens = tokenizer(x)
             for token in tokens:
                 rule = f"<W>* -> '{token}' -- <W>*"
                 g.add_rule(rule)
             return "<W>*", [f"'{token}'" for token in tokens] + ["@W:END@"]
-        # elif x == "_":  # empty string
-        #     return _rec_process_pas("'_'")
-        else:   # terminal
-            rule = f"<R> -> {x}"
-            g.add_rule(rule)
-            return "<R>", [x]
 
     pre_parsed_queries = []
     for query in outputs:
@@ -86,13 +88,17 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
 
 
 def try_build_grammar(
-                 geoquery_path:str="../../data/geoquery",
-                 questions_file:str="questions.txt",
-                 queries_file:str="queries.funql",):
+                 geoquery_path:str="../../data/geo880/",
+                 train_file:str="geo880_train600.tsv",
+                 test_file:str="geo880_test280.tsv",):
     tt = q.ticktock("try_grammar")
     tt.tick("building grammar")
-    inputs = [x.strip() for x in open(os.path.join(geoquery_path, questions_file), "r").readlines()]
-    outputs = [x.strip() for x in open(os.path.join(geoquery_path, queries_file), "r").readlines()]
+    train_lines = [x.strip() for x in open(os.path.join(geoquery_path, train_file), "r").readlines()]
+    test_lines = [x.strip() for x in open(os.path.join(geoquery_path, test_file), "r").readlines()]
+    train_pairs = [x.split("\t") for x in train_lines]
+    test_pairs = [x.split("\t") for x in test_lines]
+    inputs = [x[0] for x in train_pairs] + [x[0] for x in test_pairs]
+    outputs = [x[1] for x in train_pairs] + [x[1] for x in test_pairs]
     tokenizer = lambda x: x.split()
     g, preparsed = build_type_grammar_from(outputs, inputs, tokenizer)
     tt.tock("grammar built")
@@ -100,25 +106,26 @@ def try_build_grammar(
     print(g)
     print(g.rules_by_type)
     N = len(outputs)
+    maxlen = 0
     for before, after in zip(outputs[:N], preparsed[:N]):
         print(before)
         print(after)
         print(g.actions_for(after, format="prolog"))
+        maxlen = max(maxlen, len(g.actions_for(after, format="prolog")))
         print(g.actions_to_tree(g.actions_for(after, format="prolog")))
     tt.tock("parsed")
     print()
-    print(g.rules_by_arg["stateid"])
-    print(g.rules_by_arg["cityid"])
+    print(g.rules_by_arg["_stateid"])
+    print(g.rules_by_arg["_cityid"])
+    print(maxlen)
 
 
 
 class GeoQueryDataset(object):
     def __init__(self,
-                 geoquery_path:str="../../data/geoquery",
-                 questions_file:str="questions.txt",
-                 queries_file:str="queries.funql",
-                 train_indexes:str="train_indexes.txt",
-                 test_indexes:str="test_indexes.txt",
+                 geoquery_path:str="../../data/geo880/",
+                 train_file:str="geo880_train600.tsv",
+                 test_file:str="geo880_test280.tsv",
                  sentence_encoder:SentenceEncoder=None,
                  min_freq:int=2,
                  **kw):
@@ -127,34 +134,28 @@ class GeoQueryDataset(object):
 
         self.sentence_encoder = sentence_encoder
 
-        inputs = [x.strip() for x in open(os.path.join(geoquery_path, questions_file), "r").readlines()]
-        outputs = [x.strip() for x in open(os.path.join(geoquery_path, queries_file), "r").readlines()]
-        t_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, train_indexes), "r").readlines()])
-        x_idxs = set([int(x.strip()) for x in open(os.path.join(geoquery_path, test_indexes), "r").readlines()])
-
+        train_lines = [x.strip() for x in open(os.path.join(geoquery_path, train_file), "r").readlines()]
+        test_lines = [x.strip() for x in open(os.path.join(geoquery_path, test_file), "r").readlines()]
+        train_pairs = [x.split("\t") for x in train_lines]
+        test_pairs = [x.split("\t") for x in test_lines]
+        inputs = [x[0] for x in train_pairs] + [x[0] for x in test_pairs]
+        outputs = [x[1] for x in train_pairs] + [x[1] for x in test_pairs]
+        split_infos = ["train" for x in train_pairs] + ["test" for x in test_pairs]
 
         # build input vocabulary
-        for i, inp in enumerate(inputs):
-            self.sentence_encoder.inc_build_vocab(inp, seen=i in t_idxs)
+        for i, (inp, split_id) in enumerate(zip(inputs, split_infos)):
+            self.sentence_encoder.inc_build_vocab(inp, seen=split_id == "train")
         self.sentence_encoder.finalize_vocab(min_freq=min_freq)
 
         self.grammar, preparsed_queries = build_type_grammar_from(outputs, inputs, sentence_encoder.tokenizer)
 
         self.query_encoder = FuncQueryEncoder(self.grammar, sentence_encoder=self.sentence_encoder, format="prolog")
 
-
-        splits = [None] * len(inputs)
-        for t_idx in t_idxs:
-            splits[t_idx] = "train"
-        for x_idx in x_idxs:
-            splits[x_idx] = "test"
-        assert(all([split != None for split in splits]))
-
-        for i, out in enumerate(preparsed_queries):
-            self.query_encoder.inc_build_vocab(out, seen=i in t_idxs)
+        for i, (out, split_info) in enumerate(zip(preparsed_queries, split_infos)):
+            self.query_encoder.inc_build_vocab(out, seen=split_info == "train")
         self.query_encoder.finalize_vocab(min_freq=min_freq)
 
-        self.build_data(inputs, preparsed_queries, splits)
+        self.build_data(inputs, preparsed_queries, split_infos)
 
     def build_data(self, inputs:Iterable[str], outputs:Iterable[str], splits:Iterable[str]):
         for inp, out, split in zip(inputs, outputs, splits):
