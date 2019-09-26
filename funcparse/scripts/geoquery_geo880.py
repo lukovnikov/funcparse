@@ -27,6 +27,8 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
     g.add_rule("<R> -> _cityid :: <CITYNAME> <CITYSTATE>")
     g.add_rule("<CITYNAME> -> _cityname :: <W>*")
     g.add_rule("<CITYSTATE> -> _citystate :: <W>*")
+    g.add_rule("<R> -> @END_AND@")
+
     def _rec_process_pas(x):
         if isinstance(x, tuple):    # parent
             if x[0] == "_cityid":
@@ -35,6 +37,11 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
                 x = (x[0], [cityname, citystate])
             if x[0] == "@NAMELESS@":
                 x = ("and", x[1])
+            if x[0] == "and":
+                if len(x[1]) > 1:
+                    x = ("and", [x[1][0], ("and", x[1][1:])])
+                else:
+                    x = ("and", [x[1][0], "@END_AND@"])
             b = [_rec_process_pas(a) for a in x[1]]
             child_types, subtrees = zip(*b)
             rule_exists = False
@@ -62,6 +69,14 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
             g.add_rule(rule)
             return "<V>", [f"{x}"]
         else:  # string entities
+            if x in g.rules_by_arg:
+                existing_rules = list(g.rules_by_arg[x])
+                if len(existing_rules) > 1:
+                    raise Exception("ambiguous terminal type")
+                else:
+                    rettype, rulebody = existing_rules[0].split(" -> ")
+                    assert(rulebody == x)
+                    return rettype, [x]
             if x[0] == "'" and x[-1] == "'" and len(x) > 2:
                 x = x[1:-1]
             tokens = tokenizer(x)
@@ -357,7 +372,7 @@ def run(lr=0.1,
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing)
-    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
+    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=60)
 
     # # test
     # tt.tick("doing one epoch")
