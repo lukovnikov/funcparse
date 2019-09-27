@@ -4,7 +4,7 @@ from typing import Set
 import torch
 
 from funcparse.states import FuncTreeStateBatch
-from funcparse.vocab import SentenceEncoder, FuncQueryEncoder
+from funcparse.vocab import SentenceEncoder, FuncQueryEncoder, Vocab
 
 
 class TokenEmb(torch.nn.Module):
@@ -31,33 +31,32 @@ class TokenEmb(torch.nn.Module):
 
 
 class PtrGenOutput(torch.nn.Module):
-    def __init__(self, h_dim: int,
-                 sentence_encoder: SentenceEncoder, query_encoder: FuncQueryEncoder, **kw):
+    def __init__(self, h_dim: int, inp_vocab:Vocab=None, out_vocab:Vocab=None, **kw):
         super(PtrGenOutput, self).__init__(**kw)
         # initialize modules
-        self.gen_lin = torch.nn.Linear(h_dim, query_encoder.vocab_actions.number_of_ids(), bias=True)
+        self.gen_lin = torch.nn.Linear(h_dim, out_vocab.number_of_ids(), bias=True)
         self.copy_or_gen = torch.nn.Linear(h_dim, 2, bias=True)
         self.sm = torch.nn.Softmax(-1)
         self.logsm = torch.nn.LogSoftmax(-1)
 
-        self.sentence_encoder, self.query_encoder = sentence_encoder, query_encoder
+        self.inp_vocab, self.out_vocab = inp_vocab, out_vocab
 
-        self.register_buffer("_inp_to_act", torch.zeros(self.sentence_encoder.vocab.number_of_ids(), dtype=torch.long))
-        self.register_buffer("_act_from_inp", torch.zeros(self.query_encoder.vocab_actions.number_of_ids(), dtype=torch.long))
+        self.register_buffer("_inp_to_act", torch.zeros(self.inp_vocab.number_of_ids(), dtype=torch.long))
+        self.register_buffer("_act_from_inp", torch.zeros(out_vocab.number_of_ids(), dtype=torch.long))
 
         # for COPY, initialize mapping from input node vocab (sgb.vocab) to output action vocab (qgb.vocab_actions)
         self.build_copy_maps()
 
         # compute action mask from input: actions that are doable using input copy actions are 1, others are 0
-        actmask = torch.zeros(self.query_encoder.vocab_actions.number_of_ids(), dtype=torch.uint8)
+        actmask = torch.zeros(out_vocab.number_of_ids(), dtype=torch.uint8)
         actmask.index_fill_(0, self._inp_to_act, 1)
         self.register_buffer("_inp_actmask", actmask)
 
         # rare actions
-        self.rare_token_ids = self.query_encoder.vocab_actions.rare_ids
+        self.rare_token_ids = out_vocab.rare_ids
         rare_id = 1
         if len(self.rare_token_ids) > 0:
-            out_map = torch.arange(self.query_encoder.vocab_actions.number_of_ids())
+            out_map = torch.arange(self.out_vocab.number_of_ids())
             for rare_token_id in self.rare_token_ids:
                 out_map[rare_token_id] = rare_id
             self.register_buffer("out_map", out_map)
@@ -65,12 +64,12 @@ class PtrGenOutput(torch.nn.Module):
             self.register_buffer("out_map", None)
 
     def build_copy_maps(self):      # TODO test
-        str_action_re = re.compile(r"^<W>\*\s->\s'(.+)'\s--\s<W>\*$")
+        str_action_re = re.compile(r"^<W>\s->\s'(.+)'$")
         string_action_vocab = {}
-        for k, v in self.query_encoder.vocab_actions:
+        for k, v in self.out_vocab:
             if str_action_re.match(k):
                 string_action_vocab[str_action_re.match(k).group(1)] = v
-        for k, inp_v in self.sentence_encoder.vocab:
+        for k, inp_v in self.inp_vocab:
             if k[0] == "@" and k[-1] == "@" and len(k) > 2:
                 pass
             elif k[0] == "[" and k[-1] == "]" and len(k) > 2:
@@ -88,7 +87,7 @@ class PtrGenOutput(torch.nn.Module):
 
         # region build action masks
         actionmasks = []
-        action_vocab = self.query_encoder.vocab_actions
+        action_vocab = self.out_vocab
         for state in statebatch.states:
             # state.get_valid_actions_at(open_node)
             actionmask = torch.zeros(action_vocab.number_of_ids(), device=x.device, dtype=torch.uint8)
@@ -128,12 +127,12 @@ class PtrGenOutput(torch.nn.Module):
         # - copy probs
         # get distributions over input vocabulary
         ctx_ids = statebatch.batched_states["inp_tensor"]
-        inpdist = torch.zeros(gen_probs.size(0), self.sentence_encoder.vocab.number_of_ids(), dtype=torch.float,
+        inpdist = torch.zeros(gen_probs.size(0), self.inp_vocab.number_of_ids(), dtype=torch.float,
                               device=gen_probs.device)
         inpdist.scatter_add_(1, ctx_ids, attn_probs)
 
         # map to distribution over output actions
-        ptr_scores = torch.zeros(gen_probs.size(0), self.query_encoder.vocab_actions.number_of_ids(),
+        ptr_scores = torch.zeros(gen_probs.size(0), self.out_vocab.number_of_ids(),
                                  dtype=torch.float, device=gen_probs.device)  # - np.infty
         ptr_scores.scatter_(1, self._inp_to_act.unsqueeze(0).repeat(gen_probs.size(0), 1),
                             inpdist)

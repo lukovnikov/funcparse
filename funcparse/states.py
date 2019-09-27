@@ -106,10 +106,10 @@ class FuncTreeState(object):
                                                      device=self.nn_states["inp_tensor"].device, dtype=torch.long)
 
     def apply_rule(self, node:AlignedActionTree, rule:Union[str, int]):
-        if node.label() not in self.query_encoder.grammar.rules_by_type \
-                or rule not in self.query_encoder.grammar.rules_by_type[node.label()]:
-            raise Exception("something wrong")
-            return
+        # if node.label() not in self.query_encoder.grammar.rules_by_type \
+        #         or rule not in self.query_encoder.grammar.rules_by_type[node.label()]:
+        #     raise Exception("something wrong")
+        #     return
         self.nn_states["prev_action"] = torch.ones_like(self.nn_states["prev_action"]) \
                                         * self.query_encoder.vocab_actions[rule]
         self.out_rules.append(rule)
@@ -125,14 +125,37 @@ class FuncTreeState(object):
         func_splits = body.split(" :: ")
         sibl_splits = body.split(" -- ")
 
-        if len(func_splits) > 1:
+        if len(sibl_splits) > 1:
+            raise Exception("sibling rules no longer supported")
+
+        self.open_nodes.pop(0)
+
+        if node.label()[-1] in "*+" and body != f"{head}:END@":  # variable number of children
+            # create new sibling node
+            parent = node.parent()
+            i = len(parent)
+
+            new_sibl_node = AlignedActionTree(node.label(), [])
+            parent.append(new_sibl_node)
+
+            # manage open nodes
+            self.open_nodes = ([new_sibl_node]
+                               if (new_sibl_node.label() in self.query_encoder.grammar.rules_by_type
+                                   or new_sibl_node.label()[:-1] in self.query_encoder.grammar.rules_by_type)
+                               else []) \
+                              + self.open_nodes
+
+            if self.use_gold:
+                gold_child = parent._align[i]
+                new_sibl_node._align = gold_child
+
+        if len(func_splits) > 1 :
             rule_arg, rule_inptypes = func_splits
             rule_inptypes = rule_inptypes.split(" ")
 
             # replace label of tree
             node.set_label(rule_arg)
             node.set_action(rule)
-            self.open_nodes.pop(0)
 
             # align to gold
             if self.use_gold:
@@ -149,45 +172,30 @@ class FuncTreeState(object):
             # manage open nodes
             self.open_nodes = [child_node for child_node in node if child_node.label() in self.query_encoder.grammar.rules_by_type]\
                               + self.open_nodes
-
-        elif len(sibl_splits) > 1:
-            rule_arg, rule_sibltypes = sibl_splits
-            rule_sibltypes = rule_sibltypes.split(" ")
-            assert(len(rule_sibltypes) == 1)
-
-            # replace label of tree
-            node.set_label(rule_arg)
-            node.set_action(rule)
-            self.open_nodes.pop(0)
-
-            # create new sibling node
-            parent = node.parent()
-            i = len(parent)
-            new_sibl_node = AlignedActionTree(rule_sibltypes[0], [])
-            parent.append(new_sibl_node)
-            self.open_nodes = ([new_sibl_node] if new_sibl_node.label() in self.query_encoder.grammar.rules_by_type else []) \
-                                + self.open_nodes
-
-            if self.use_gold:
-                gold_child = parent._align[i]
-                new_sibl_node._align = gold_child
-
         else:   # terminal
             node.set_label(body)
             node.set_action(rule)
-            self.open_nodes.pop(0)
 
     def copy_token(self, node:AlignedActionTree, inp_position:int):
         inplabel = self.inp_tokens[inp_position]
-        rule = f"<W>* -> '{inplabel}' -- <W>*"
+        rule = f"<W> -> '{inplabel}'"
         self.apply_rule(node, rule)
 
     def get_valid_actions_at(self, node:AlignedActionTree):
-        node_label = node.label()
-        if node_label in self.query_encoder.grammar.rules_by_type:
-            return self.query_encoder.grammar.rules_by_type[node_label]
-        else:
-            return [self.query_encoder.none_action]
+        action_mask = self.get_valid_action_mask_at(node)
+        valid_action_ids = action_mask.nonzero().cpu().numpy()
+        # TODO: finish: translate back to strings
+
+        # node_label = node.label()
+        # if node_label in self.query_encoder.grammar.rules_by_type:
+        #     if node_label[-1] in "*+":
+        #         ret = self.query_encoder.grammar.rules_by_type[node_label]
+        #         ret += self.query_encoder.grammar.rules_by_type[node_label[:-1]]
+        #         return ret
+        #     else:
+        #         return self.query_encoder.grammar.rules_by_type[node_label]
+        # else:
+        #     return [self.query_encoder.none_action]
 
     def get_valid_action_mask_at(self, node:AlignedActionTree):
         node_label = node.label()

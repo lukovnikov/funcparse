@@ -28,6 +28,7 @@ class TFActionSeqDecoder(torch.nn.Module):
 
         all_terminated = False
 
+        step_probs = []
         step_losses = []
         step_accs = []  # 1s for correct ones, 0s for incorrect ones, -1 for masked ones
         step_terms = []
@@ -45,8 +46,10 @@ class TFActionSeqDecoder(torch.nn.Module):
                     open_node = state.open_nodes[0]
                     gold_rule_str = state.get_gold_action_at(open_node)
                     gold_rules[i] = state.query_encoder.vocab_actions[gold_rule_str]
-                    term_mask[i] = 1
                     state.apply_action(open_node, gold_rule_str)
+            for i, state in enumerate(states):
+                if not state.is_terminated:
+                    term_mask[i] = 1
             # compute loss
             step_loss = self.loss(probs, gold_rules)
             # compute accuracy
@@ -57,7 +60,7 @@ class TFActionSeqDecoder(torch.nn.Module):
             step_terms.append(term_mask)
             all_terminated = bool(torch.all(term_mask == 0).item())
 
-        mask = torch.stack(step_terms, 0).transpose(1, 0)
+        mask = torch.stack([step_terms[0]]+step_terms, 0).transpose(1, 0)[:, :-1]
         # aggregate losses
         losses = torch.stack(step_losses, 0).transpose(1, 0)
         losses = losses * mask.float()
@@ -69,6 +72,60 @@ class TFActionSeqDecoder(torch.nn.Module):
         seqacc = (step_accs.bool() | ~mask.bool()).all(-1).float().mean()
 
         return {"output": fsb, "loss": loss, "any_acc": elemacc, "seq_acc": seqacc}
+
+
+class GreedyActionSeqDecoder(torch.nn.Module):
+    def __init__(self, model:TransitionModel, maxsteps=25, **kw):
+        super(GreedyActionSeqDecoder, self).__init__(**kw)
+        self.model = model
+        self.maxsteps = maxsteps
+
+    def forward(self, fsb:FuncTreeStateBatch):
+        states = fsb.unbatch()
+        hasgold = []
+        numex = 0
+
+        for state in states:
+            hasgold.append(state.has_gold)
+            state.start_decoding()
+            state.use_gold = False
+            numex += 1
+
+        assert(all([_hg is True for _hg in hasgold]) or all([_hg is False for _hg in hasgold]))
+        hasgold = hasgold[0]
+
+        all_terminated = False
+
+        step = 0
+        # main loop
+        while not all_terminated and step < self.maxsteps:
+            all_terminated = True
+            fsb.batch()
+            probs, fsb = self.model(fsb)
+            _, pred_rule_ids = probs.max(-1)
+            pred_rule_ids = list(pred_rule_ids.cpu().numpy())
+            states = fsb.unbatch()
+            for i, state in enumerate(states):
+                if not state.is_terminated:
+                    open_node = state.open_nodes[0]
+                    state.apply_action(open_node, state.query_encoder.vocab_actions(pred_rule_ids[i]))
+                    all_terminated = False
+            step += 1
+
+        if hasgold:     # compute accuracies (seq and tree) with top scoring states
+            seqaccs = 0
+            treeaccs = 0
+            # elemaccs = 0
+            total = 0
+            for out_state in fsb.states:
+                seqaccs += float(out_state.out_rules == out_state.gold_rules)
+                treeaccs += out_state.out_tree == out_state.gold_tree
+                total += 1
+            return {"output": fsb,
+                    "seq_acc": seqaccs/total, "tree_acc": treeaccs/total}
+        else:
+            return {"output": fsb}
+
 
 
 class BeamActionSeqDecoder(torch.nn.Module):

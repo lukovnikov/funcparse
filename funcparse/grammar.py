@@ -250,39 +250,32 @@ class FuncGrammar(object):
             pas = passtr_to_pas(x)
         else:
             raise Exception(f"unknown format {format}")
-        ret = self._actions_for_rec_top_down(pas)
+        ret = self._actions_for_rec_bottom_up(pas)
         return ret
 
-    def _actions_for_rec_bottom_up(self, pas):  # TODO
+    def _actions_for_rec_bottom_up(self, pas):
         if isinstance(pas, tuple):      # has children
             arg_name, children = pas
-            children_rets = [self._actions_for_rec_bottom_up(child) for child in children]
-            # process children - merge siblings into single variable-length types
-            children_types, children_rules = [], []
-            prev_child_type = None
-            for child_type, child_rules in children_rets:
-                child_rule = child_rules[0]     # topmost rule generated current child
-                _, child_body = child_rule.split(" -> ")
-                if child_type[-1] in "*+":  # variable length
-                    assert(" :: " not in child_body)
-                    sibl_splits = child_body.split(" -- ")
-                    if len(sibl_splits) > 1:    # will be continued
-                        assert(prev_child_type is None or prev_child_type == child_type)
-                        prev_child_type = child_type
-                    else:   # is terminating
-                        children_types.append(child_type)
-                        prev_child_type = None
-                    children_rules += child_rules
-                else:
-                    assert(prev_child_type is None)
-                    children_types.append(child_type)
-                    children_rules += child_rules
+            children_rules, children_types = [], []
+            children_ruleses = [self._actions_for_rec_bottom_up(child) for child in children]
+            # get child types
+            for _child_rules in children_ruleses:
+                _child_rule = _child_rules[0]
+                child_type, child_body = _child_rule.split(" -> ")
+                children_types.append(child_type)
+                children_rules += _child_rules
+
+            # merge siblings into single child type
+            if len(children_types) > 0 and children_types[-1][-1] in "*+":
+                # variable number of children rules
+                exp_child_type = children_types[-1][:-1]
+                for child_type in children_types[:-1]:
+                    assert(child_type == exp_child_type)
+                children_types = [children_types[-1]]
         else:
             arg_name, children = pas, []
             children_types = []
             children_rules = []
-
-        pas_numchildren = len(children_types)
 
         # find applicable rules
         rules = self.rules_by_arg[arg_name]
@@ -295,14 +288,12 @@ class FuncGrammar(object):
             sibl_splits = rule_body.split(" -- ")
             is_func_rule = len(func_splits) > 1
             is_sibl_rule = len(sibl_splits) > 1
-            # has_func_rules = has_func_rules or is_func_rule
-            # has_sibl_rules = has_sibl_rules or is_sibl_rule
-            # assert(not (has_sibl_rules and has_func_rules))
-            if not is_sibl_rule:
-                rule_arg, rule_inptypes = (func_splits[0], func_splits[1].split(" ")) \
-                    if len(func_splits) > 1 else (func_splits, [])
+            if not is_sibl_rule and not is_func_rule:   # terminal
+                valid_rules.add(rule)
+            elif not is_sibl_rule:  # func nonterminal
+                rule_arg, rule_inptypes = func_splits[0], func_splits[1].split(" ")
                 addit = True
-                if pas_numchildren != len(rule_inptypes):   # must have same number of children
+                if len(children_types) != len(rule_inptypes):   # must have same number of children
                     addit = False
                     continue
                 # children must match types
@@ -315,22 +306,16 @@ class FuncGrammar(object):
                 if addit:
                     valid_rules.add(rule)
             else:
+                raise Exception("sibling rule syntax no longer supported")
                 valid_rules.add(rule)
 
-        #
         if len(valid_rules) == 0:
             raise Exception(f"can not parse, valid rules for arg '{arg_name}' not found")
         elif len(valid_rules) > 1:
             raise Exception(f"can not parse, multiple valid rules for arg '{arg_name}' found")
         else:
             rule = list(valid_rules)[0]
-            rule_type, rule_body = rule.split(" -> ")
-            return rule_type, [rule] + children_rules
-            # func_splits = rule_body.split(" :: ")
-            # sibl_splits = rule_body.split(" -- ")
-            # is_func_rule = len(func_splits) > 1
-            # is_sibl_rule = len(sibl_splits) > 1
-
+            return [rule] + children_rules
 
     def _actions_for_rec_top_down(self, pas, out_type:str=None):
         out_types = self.start_types if out_type is None else set([out_type])
@@ -339,7 +324,7 @@ class FuncGrammar(object):
             arg_name, children = pas
         else:
             arg_name, children = pas, []
-
+        # what's this doing??
         if out_type is not None and out_type not in self.rules_by_type:
             assert (pas == arg_name and len(children) == 0 and arg_name == out_type)
             assert (arg_name in self.symbols)
@@ -594,14 +579,24 @@ class FuncGrammar(object):
                 rule_inptypes = rule_inptypes.split(" ")
                 ret.set_label(rule_arg)
                 remaining_actions = remaining_actions[1:]
-                for rule_inptype in rule_inptypes:
-                    subtree, remaining_actions = self._actions_to_tree_rec(remaining_actions, out_type=rule_inptype)
-                    if isinstance(subtree, Tree):
-                        subtree = [subtree]
-                    for subtree_e in subtree:
-                        ret.append(subtree_e)
+                if len(rule_inptypes) == 1 and rule_inptypes[-1][-1] in "*+":
+                    rule_inptype = rule_inptypes[-1][:-1]
+                    terminated = False
+                    while not terminated:
+                        subtree, remaining_actions = self._actions_to_tree_rec(remaining_actions, out_type=rule_inptype)
+                        ret.append(subtree)
+                        if subtree.label() == f"{rule_inptypes[-1]}:END@":
+                            terminated = True
+                else:
+                    for rule_inptype in rule_inptypes:
+                        subtree, remaining_actions = self._actions_to_tree_rec(remaining_actions, out_type=rule_inptype)
+                        if isinstance(subtree, Tree):
+                            subtree = [subtree]
+                        for subtree_e in subtree:
+                            ret.append(subtree_e)
                 return ret, remaining_actions
             elif len(rule_sibl_splits) > 1:
+                raise Exception("sibling rules no longer supported")
                 rule_arg, rule_sibl_types = rule_sibl_splits
                 rule_sibl_types = rule_sibl_types.split(" ")
                 assert(len(rule_sibl_types) == 1)

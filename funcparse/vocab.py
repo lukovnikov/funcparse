@@ -169,7 +169,6 @@ class SentenceEncoder(VocabBuilder):
     
     
 class FuncQueryEncoder(VocabBuilder):
-    string_types = ("<W>+", "<W>*")
     def __init__(self, grammar:FuncGrammar=None, vocab_tokens:Vocab=None, vocab_actions:Vocab=None,
                  sentence_encoder:SentenceEncoder=None, format:str="prolog", **kw):
         super(FuncQueryEncoder, self).__init__(**kw)
@@ -187,8 +186,6 @@ class FuncQueryEncoder(VocabBuilder):
 
         self.format = format
 
-        self.string_actions = set()
-
         # prebuild valid action masks
         self._valid_action_mask_by_type = {}
 
@@ -197,6 +194,10 @@ class FuncQueryEncoder(VocabBuilder):
             action_mask = torch.zeros(self.vocab_actions.number_of_ids(), dtype=torch.uint8)
             for rule in rules:
                 action_mask[self.vocab_actions[rule]] = 1
+            if typestr[-1] in "*+":
+                rules = self.grammar.rules_by_type[typestr[:-1]]
+                for rule in rules:
+                    action_mask[self.vocab_actions[rule]] = 1
             self._valid_action_mask_by_type[typestr] = action_mask
         # self._valid_action_mask_by_type["_@unk@_"] = torch.tensor(self.vocab_actions.number_of_ids(), dtype=torch.uint8)
 
@@ -220,8 +221,6 @@ class FuncQueryEncoder(VocabBuilder):
         for action in actions:
             self.vocab_actions.add_token(action, seen=seen)
             head, body = action.split(" -> ")
-            if head in self.string_types:
-                self.string_actions.add(action)
             self.vocab_tokens.add_token(head, seen=seen)
             body = body.split(" ")
             body = [x for x in body if x not in ["::", "--"]]

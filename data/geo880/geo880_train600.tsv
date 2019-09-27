@@ -154,7 +154,7 @@ what is the largest city in michigan ?	_answer ( A , _largest ( A , ( _city ( A 
 how many rivers are in the state with the highest point ?	_answer ( A , _count ( B , ( _river ( B ) , _loc ( B , C ) , _state ( C ) , _loc ( D , C ) , _highest ( D , _place ( D ) ) ) , A ) )
 what cities are located in pennsylvania ?	_answer ( A , ( _city ( A ) , _loc ( A , B ) , _const ( B , _stateid ( pennsylvania ) ) ) )
 what is the state with the lowest population ?	_answer ( A , _smallest ( B , ( _state ( A ) , _population ( A , B ) ) ) )
-what is the highest point in each state whose lowest point is sea level ?	_answer ( A , ( _high_point ( B , A ) , _state ( B ) , _low_point ( B , C ) , _elevation ( C , 0.0 ) ) )
+what is the highest point in each state whose lowest point is sea level ?	_answer ( A , ( _high_point ( B , A ) , _state ( B ) , _low_point ( B , C ) , _elevation ( C , _val ( 0.0 ) ) ) )
 give me the cities in usa ?	_answer ( A , ( _city ( A ) , _loc ( A , B ) , _const ( B , _countryid ( usa ) ) ) )
 how many states does the missouri river run through ?	_answer ( A , _count ( B , ( _state ( B ) , _const ( C , _riverid ( missouri ) ) , _river ( C ) , _traverse ( C , B ) ) , A ) )
 what state has the city with the largest population ?	_answer ( A , ( _state ( A ) , _loc ( B , A ) , _largest ( C , ( _city ( B ) , _population ( B , C ) ) ) ) )

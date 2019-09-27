@@ -12,7 +12,8 @@ from nltk import PorterStemmer
 
 from torch.utils.data import DataLoader
 
-from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTransition, BeamActionSeqDecoder
+from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTransition, BeamActionSeqDecoder, \
+    GreedyActionSeqDecoder
 from funcparse.grammar import FuncGrammar, passtr_to_pas
 from funcparse.states import FuncTreeState, FuncTreeStateBatch
 from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder
@@ -23,11 +24,13 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
     # get all predicates, terminals and words from queries
     # example inputs: and(wife(president(US), BO), wife(president(countryid('united states')))
     g = FuncGrammar("<R>")
-    # DONETODO: IMPORTANT (BREAKING): can not allow rules of the forms <R> -> <W>* <W>* or <R> -> <W>* <R>, rules may only contain a single argument if it is of sibling type (*)
+    # DONETODO: IMPORTANT (BREAKING): can not allow rules of the forms <R> -> <W>* <W>* or <R> -> <W>* <R>, rules may only contain a single argument if it is of sibling type (*), otherwise gold alignment in state/model has to be changed
     g.add_rule("<R> -> _cityid :: <CITYNAME> <CITYSTATE>")
     g.add_rule("<CITYNAME> -> _cityname :: <W>*")
     g.add_rule("<CITYSTATE> -> _citystate :: <W>*")
-    g.add_rule("<R> -> @END_AND@")
+    g.add_rule("<R>* -> <R>*:END@")     # terminator
+    g.add_rule("<R> -> and :: <R>*")
+    g.add_rule("<W>* -> <W>*:END@")
 
     def _rec_process_pas(x):
         if isinstance(x, tuple):    # parent
@@ -37,11 +40,11 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
                 x = (x[0], [cityname, citystate])
             if x[0] == "@NAMELESS@":
                 x = ("and", x[1])
-            if x[0] == "and":
-                if len(x[1]) > 1:
-                    x = ("and", [x[1][0], ("and", x[1][1:])])
-                else:
-                    x = ("and", [x[1][0], "@END_AND@"])
+            # if x[0] == "and":
+            #     if len(x[1]) > 1:
+            #         x = ("and", [x[1][0], ("and", x[1][1:])])
+            #     else:
+            #         x = ("and", [x[1][0], "@END_AND@"])
             b = [_rec_process_pas(a) for a in x[1]]
             child_types, subtrees = zip(*b)
             rule_exists = False
@@ -53,15 +56,33 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
                     if "::" not in rulebody:
                         continue
                     rule_arg, rule_children = rulebody.split(" :: ")
-                    if child_types == tuple(rule_children.split()):
+                    rule_children = rule_children.split(" ")
+                    if child_types == tuple(rule_children):
                         existing_rules_.append(rule)
+                    elif rule_children[0][-1] in "*+":
+                        assert(len(rule_children) == 1)
+                        rule_matches = True
+                        for child_type in child_types:
+                            if child_type != rule_children[0][:-1]:
+                                rule_matches = False
+                                break
+                        if rule_matches:
+                            existing_rules_.append(rule)
                 if len(existing_rules_) == 1:
                     rule_exists = True
-                    rettype, rulebody = existing_rules_[0].split(" -> ")
+                    rule = existing_rules_[0]
+                elif len(existing_rules_) > 1:
+                    raise Exception("Ambiguous! More than one rule applicable.")
             if not rule_exists:
                 rettype = "<R>"
                 rule = f"{rettype} -> {x[0]} :: {' '.join(child_types)}"
                 g.add_rule(rule)
+            rettype, rulebody = rule.split(" -> ")
+            rule_arg, rule_children = rulebody.split(" :: ")
+            rule_children = rule_children.split(" ")
+            if rule_children[0][-1] in "*+":
+                assert (len(rule_children) == 1)
+                subtrees = subtrees + ([rule_children[0] + ":END@"],)
             treestr = f"{x[0]}({', '.join([', '.join(subtree) for subtree in subtrees])})"
             return rettype, [treestr]
         elif x in set("A B C D E F G H I J K L".split()):   # variables
@@ -81,9 +102,9 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
                 x = x[1:-1]
             tokens = tokenizer(x)
             for token in tokens:
-                rule = f"<W>* -> '{token}' -- <W>*"
+                rule = f"<W> -> '{token}'"
                 g.add_rule(rule)
-            return "<W>*", [f"'{token}'" for token in tokens] + ["@W:END@"]
+            return "<W>*", [f"'{token}'" for token in tokens]
 
     pre_parsed_queries = []
     for query in outputs:
@@ -91,13 +112,11 @@ def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
         _, pre_parsed_query = _rec_process_pas(pas)
         pre_parsed_queries.append(pre_parsed_query[0])
 
-    g.add_rule("<W>* -> @W:END@")
-
     # get all words from questions
     for question in inputs:
         tokens = tokenizer(question)
         for token in tokens:
-            rule = f"<W>* -> '{token}' -- <W>*"
+            rule = f"<W> -> '{token}'"
             g.add_rule(rule)
     return g, pre_parsed_queries
 
@@ -270,7 +289,7 @@ class BasicPtrGenModel(TransitionModel):
                     _rule = action
                 else:
                     action = f"COPY[{copy_action_e}]"
-                    _rule = f"<W>* -> '{state.inp_tokens[copy_action_e]}' -- <W>*"
+                    _rule = f"<W> -> '{state.inp_tokens[copy_action_e]}'"
                 predicted_actions.append(action)
                 state.pred_actions.append(action)
                 state.pred_rules.append(_rule)
@@ -318,24 +337,24 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     encoder = PytorchSeq2SeqWrapper(
         torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
                       dropout=dropout))
-    decoder_emb = torch.nn.Embedding(query_encoder.vocab_tokens.number_of_ids(), embdim, padding_idx=0)
-    decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_tokens.rare_ids, rare_id=1)
+    decoder_emb = torch.nn.Embedding(query_encoder.vocab_actions.number_of_ids(), embdim, padding_idx=0)
+    decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_actions.rare_ids, rare_id=1)
     decoder_rnn = [torch.nn.LSTMCell(embdim, hdim)]
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim*3, sentence_encoder, query_encoder)
+    decoder_out = PtrGenOutput(hdim*3, sentence_encoder.vocab, query_encoder.vocab_actions)
     attention = q.Attention(q.MatMulDotAttComp(hdim, hdim*2))
     model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
     dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
 
 
-def run(lr=0.1,
-        batsize=50,
+def run(lr=0.001,
+        batsize=20,
         epochs=30,
         embdim=100,
-        numlayers=2,
+        numlayers=1,
         dropout=.2,
         wreg=1e-6,
         cuda=False,
@@ -372,8 +391,8 @@ def run(lr=0.1,
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing)
-    beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=60)
-
+    # beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
+    freedecoder = GreedyActionSeqDecoder(tfdecoder.model, maxsteps=50)
     # # test
     # tt.tick("doing one epoch")
     # for batch in iter(train_dl):
@@ -412,7 +431,7 @@ def run(lr=0.1,
                          _train_batch=trainbatch, device=device, on_end=reduce_lr)
 
     # 7. define validation function (using partial)
-    validepoch = partial(q.test_epoch, model=beamdecoder, dataloader=test_dl, losses=vlosses, device=device)
+    validepoch = partial(q.test_epoch, model=freedecoder, dataloader=test_dl, losses=vlosses, device=device)
 
     # 7. run training
     tt.tick("training")
