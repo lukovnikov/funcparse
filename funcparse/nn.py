@@ -108,8 +108,6 @@ class SumPtrGenOutput(torch.nn.Module):
         gen_scores = self.gen_lin(x)
         if self.out_map is not None:
             gen_scores = gen_scores.index_select(1, self.out_map)
-        if actionmask is not None:
-            gen_scores = gen_scores + torch.log(actionmask.float())
 
         # - copy probs
         # get distributions over input vocabulary
@@ -126,6 +124,8 @@ class SumPtrGenOutput(torch.nn.Module):
 
         # - mix
         out_scores = gen_scores + ptr_scores
+        if actionmask is not None:
+            gen_scores = gen_scores + torch.log(actionmask.float())
         out_probs = self.sm(out_scores)
         return out_probs, None, gen_scores, attn_scores
 
