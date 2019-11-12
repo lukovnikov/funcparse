@@ -257,7 +257,8 @@ class LSTMCellTransition(TransitionModel):
                 states[f"{i}"]["h.dropout"] = h_dropout_mask
                 states[f"{i}"]["c.dropout"] = c_dropout_mask
             else:
-                x, c = self.cells[i](_x, (states[f"{i}"]["h"] * states[f"{i}"]["h.dropout"], states[f"{i}"]["c"] * states[f"{i}"]["c.dropout"]))
+                x, c = self.cells[i](_x, (states[f"{i}"]["h"] * states[f"{i}"]["h.dropout"],
+                                          states[f"{i}"]["c"] * states[f"{i}"]["c.dropout"]))
             states[f"{i}"]["h"] = x
             states[f"{i}"]["c"] = c
         return x

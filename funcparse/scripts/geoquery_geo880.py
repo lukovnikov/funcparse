@@ -17,7 +17,7 @@ from funcparse.decoding import TransitionModel, TFActionSeqDecoder, LSTMCellTran
 from funcparse.grammar import FuncGrammar, passtr_to_pas
 from funcparse.states import FuncTreeState, FuncTreeStateBatch
 from funcparse.vocab import VocabBuilder, SentenceEncoder, FuncQueryEncoder
-from funcparse.nn import TokenEmb, PtrGenOutput
+from funcparse.nn import TokenEmb, PtrGenOutput, SumPtrGenOutput
 
 
 def build_type_grammar_from(outputs:List[str], inputs:List[str], tokenizer):
@@ -279,7 +279,7 @@ class BasicPtrGenModel(TransitionModel):
         x.batched_states["prev_summ"] = summ
         enc = torch.cat([enc, summ], -1)
 
-        probs, ptr_or_gen, gen_probs, ptr_position_probs = self.out_lin(enc, x, alphas)
+        probs, ptr_or_gen, gen_probs, ptr_position_probs = self.out_lin(enc, x, scores)
         return probs, x
 
         # _, rules = probs.max(-1)
@@ -359,7 +359,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim + encoder_dim, sentence_encoder.vocab, query_encoder.vocab_actions)
+    decoder_out = SumPtrGenOutput(hdim + encoder_dim, sentence_encoder.vocab, query_encoder.vocab_actions)
     attention = q.Attention(q.MatMulDotAttComp(hdim, encoder_dim))
     enctodec = torch.nn.Sequential(
         torch.nn.Linear(encoder_dim, hdim),
