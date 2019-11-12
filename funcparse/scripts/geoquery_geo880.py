@@ -235,7 +235,7 @@ def get_dataloaders(ds:GeoQueryDataset, batsize:int=5):
 
 
 class BasicPtrGenModel(TransitionModel):
-    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., enc_to_dec=None, **kw):
+    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., enc_to_dec=None, feedatt=False, **kw):
         super(BasicPtrGenModel, self).__init__(**kw)
         self.inp_emb, self.inp_enc = inp_emb, inp_enc
         self.out_emb, self.out_rnn, self.out_lin = out_emb, out_rnn, out_lin
@@ -243,6 +243,7 @@ class BasicPtrGenModel(TransitionModel):
         self.att = att
         # self.ce = q.CELoss(reduction="none", ignore_index=0, mode="probs")
         self.dropout = torch.nn.Dropout(dropout)
+        self.feedatt = feedatt
 
     def forward(self, x:FuncTreeStateBatch):
         if "ctx" not in x.batched_states:
@@ -269,7 +270,9 @@ class BasicPtrGenModel(TransitionModel):
         # DONE: concat previous attention summary to emb
         if "prev_summ" not in x.batched_states:
             x.batched_states["prev_summ"] = torch.zeros_like(ctx[:, 0])
-        _emb = torch.cat([emb, x.batched_states["prev_summ"]], 1)
+        _emb = emb
+        if self.feedatt == True:
+            _emb = torch.cat([_emb, x.batched_states["prev_summ"]], 1)
         enc = self.out_rnn(_emb, x.batched_states["rnn"])
 
         alphas, summ, scores = self.att(enc, ctx, ctx_mask)
@@ -341,26 +344,28 @@ class BasicPtrGenModel(TransitionModel):
 
 def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
                  sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None,
-                 smoothing:float=0.,):
+                 smoothing:float=0., feedatt=False):
     inpemb = torch.nn.Embedding(sentence_encoder.vocab.number_of_ids(), embdim, padding_idx=0)
     inpemb = TokenEmb(inpemb, rare_token_ids=sentence_encoder.vocab.rare_ids, rare_id=1)
-    encoder = q.LSTMEncoder(embdim, *([hdim]*numlayers), bidir=True, dropout_in=dropout)
+    encoder_dim = hdim
+    encoder = q.LSTMEncoder(embdim, *([encoder_dim // 2]*numlayers), bidir=True, dropout_in=dropout)
     # encoder = PytorchSeq2SeqWrapper(
     #     torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
     #                   dropout=dropout))
     decoder_emb = torch.nn.Embedding(query_encoder.vocab_actions.number_of_ids(), embdim, padding_idx=0)
     decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_actions.rare_ids, rare_id=1)
-    decoder_rnn = [torch.nn.LSTMCell(embdim + hdim * 2, hdim)]
+    dec_rnn_in_dim = embdim + (encoder_dim if feedatt else 0)
+    decoder_rnn = [torch.nn.LSTMCell(dec_rnn_in_dim, hdim)]
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim*3, sentence_encoder.vocab, query_encoder.vocab_actions)
-    attention = q.Attention(q.MatMulDotAttComp(hdim, hdim*2))
+    decoder_out = PtrGenOutput(hdim + encoder_dim, sentence_encoder.vocab, query_encoder.vocab_actions)
+    attention = q.Attention(q.MatMulDotAttComp(hdim, encoder_dim))
     enctodec = torch.nn.Sequential(
-        torch.nn.Linear(hdim * 2, hdim),
+        torch.nn.Linear(encoder_dim, hdim),
         torch.nn.Tanh()
     )
-    model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention, dropout=dropout, enc_to_dec=enctodec)
+    model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention, dropout=dropout, enc_to_dec=enctodec, feedatt=feedatt)
     dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
 
@@ -380,6 +385,7 @@ def run(lr=0.001,
         smoothing=0.,
         fulltest=False,
         cosine_restarts=-1.,
+        feedatt=False,
         ):
     # DONE: Porter stemmer
     # DONE: linear attention
@@ -405,7 +411,7 @@ def run(lr=0.001,
 
     tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
-                             smoothing=smoothing)
+                             smoothing=smoothing, feedatt=feedatt)
     # beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
     freedecoder = GreedyActionSeqDecoder(tfdecoder.model, maxsteps=50)
     # # test

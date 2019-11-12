@@ -12,6 +12,7 @@ from funcparse.vocab import SentenceEncoder, FuncQueryEncoder
 
 
 class AlignedActionTree(ActionTree):
+    orderless = ["and", "or"]
     def __init__(self, node, children=None):
         super(AlignedActionTree, self).__init__(node, children=children)
         self._align = None
@@ -37,6 +38,45 @@ class AlignedActionTree(ActionTree):
 
     def eq(self, other):
         assert(isinstance(other, ActionTree))
+        if self._label != other._label:
+            return False
+        if self._label in self.orderless:
+            # check if every child is in other and other contains no more
+            if len(self) != len(other):
+                return False
+            selfchildren = [selfchild for selfchild in self]
+            otherchildren = [otherchild for otherchild in other]
+            if not selfchildren[-1].eq(otherchildren[-1]):
+                return False    # terminator must be same and in the end
+            else:
+                selfchildren = selfchildren[:-1]
+                otherchildren = otherchildren[:-1]
+            i = 0
+            while i < len(selfchildren):
+                selfchild = selfchildren[i]
+                j = 0
+                unbroken = True
+                while j < len(otherchildren):
+                    otherchild = otherchildren[j]
+                    if selfchild.eq(otherchild):
+                        selfchildren.pop(i)
+                        otherchildren.pop(j)
+                        i -= 1
+                        j -= 1
+                        unbroken = False
+                        break
+                    j += 1
+                if unbroken:
+                    return False
+                i += 1
+            if len(selfchildren) == 0 and len(otherchildren) == 0:
+                return True
+            else:
+                return False
+        else:
+            return all([selfchild.eq(otherchild) for selfchild, otherchild in zip(self, other)])
+
+
 
 
 

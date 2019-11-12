@@ -119,7 +119,7 @@ class GreedyActionSeqDecoder(torch.nn.Module):
             total = 0
             for out_state in fsb.states:
                 seqaccs += float(out_state.out_rules == out_state.gold_rules)
-                treeaccs += out_state.out_tree == out_state.gold_tree
+                treeaccs += out_state.out_tree.eq(out_state.gold_tree)
                 total += 1
             return {"output": fsb,
                     "seq_acc": seqaccs/total, "tree_acc": treeaccs/total}
