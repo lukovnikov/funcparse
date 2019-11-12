@@ -125,7 +125,7 @@ class SumPtrGenOutput(torch.nn.Module):
         # - mix
         out_scores = gen_scores + ptr_scores
         if actionmask is not None:
-            gen_scores = gen_scores + -1e6 #torch.log(actionmask.float())
+            gen_scores = gen_scores + -1e6 * actionmask.float() #torch.log(actionmask.float())
         out_probs = self.sm(out_scores)
         return out_probs, None, gen_scores, attn_scores
 
