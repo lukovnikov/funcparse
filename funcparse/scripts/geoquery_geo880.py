@@ -235,10 +235,11 @@ def get_dataloaders(ds:GeoQueryDataset, batsize:int=5):
 
 
 class BasicPtrGenModel(TransitionModel):
-    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., **kw):
+    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., enc_to_dec=None, **kw):
         super(BasicPtrGenModel, self).__init__(**kw)
         self.inp_emb, self.inp_enc = inp_emb, inp_enc
         self.out_emb, self.out_rnn, self.out_lin = out_emb, out_rnn, out_lin
+        self.enc_to_dec = enc_to_dec
         self.att = att
         # self.ce = q.CELoss(reduction="none", ignore_index=0, mode="probs")
         self.dropout = torch.nn.Dropout(dropout)
@@ -249,8 +250,10 @@ class BasicPtrGenModel(TransitionModel):
             inptensor = x.batched_states["inp_tensor"]
             mask = inptensor != 0
             inpembs = self.inp_emb(inptensor)
-            inpembs = self.dropout(inpembs)
-            inpenc = self.inp_enc(inpembs, mask)
+            # inpembs = self.dropout(inpembs)
+            inpenc, final_enc = self.inp_enc(inpembs, mask)
+            final_enc = final_enc.view(final_enc.size(0), -1).contiguous()
+            final_enc = self.enc_to_dec(final_enc)
             x.batched_states["ctx"] = inpenc
             x.batched_states["ctx_mask"] = mask
 
@@ -260,73 +263,80 @@ class BasicPtrGenModel(TransitionModel):
         emb = self.out_emb(x.batched_states["prev_action"])
 
         if "rnn" not in x.batched_states:
+            # TODO: set final_enc as initial state of top layer of decoder
             x.batched_states["rnn"] = {}
-        enc = self.out_rnn(emb, x.batched_states["rnn"])
+
+        # DONE: concat previous attention summary to emb
+        if "prev_summ" not in x.batched_states:
+            x.batched_states["prev_summ"] = torch.zeros_like(ctx[:, 0])
+        _emb = torch.cat([emb, x.batched_states["prev_summ"]], 1)
+        enc = self.out_rnn(_emb, x.batched_states["rnn"])
 
         alphas, summ, scores = self.att(enc, ctx, ctx_mask)
+        x.batched_states["prev_summ"] = summ
         enc = torch.cat([enc, summ], -1)
 
         probs, ptr_or_gen, gen_probs, ptr_position_probs = self.out_lin(enc, x, alphas)
         return probs, x
 
-        _, rules = probs.max(-1)
-        _, actions_ptr_or_gen = ptr_or_gen.max(-1)
-        _, ptr_positions = ptr_position_probs.max(-1)
-        _, actions_gen = gen_probs.max(-1)
-
-
-        # predicted actions
-        predicted_actions = []
-        for i, (state, ptr_or_gen_e, gen_action_e, copy_action_e) \
-                in enumerate(zip(x.states,
-                                 list(actions_ptr_or_gen.cpu()),
-                                 list(actions_gen.cpu()),
-                                 list(ptr_positions.cpu()))):
-            if not state.is_terminated:
-                open_node = state.open_nodes[0]
-                if ptr_or_gen_e.item() == 0:  # gen
-                    action = state.query_encoder.vocab_actions(gen_action_e.item())
-                    _rule = action
-                else:
-                    action = f"COPY[{copy_action_e}]"
-                    _rule = f"<W> -> '{state.inp_tokens[copy_action_e]}'"
-                predicted_actions.append(action)
-                state.pred_actions.append(action)
-                state.pred_rules.append(_rule)
-            else:
-                predicted_actions.append(state.query_encoder.none_action)
-
-        if x.states[0].has_gold:    # compute loss and accuracies
-            gold_actions = torch.zeros_like(actions)
-            term_mask = torch.zeros_like(actions).float()
-            for i, state in enumerate(x.states):
-                if not state.is_terminated:
-                    open_node = state.open_nodes[0]
-                    gold_actions[i] = state.query_encoder.vocab_actions[state.get_gold_action_at(open_node)]
-                    term_mask[i] = 1
-                else:
-                    term_mask[i] = 0
-            loss = self.ce(probs, gold_actions)
-            acc = gold_actions == actions
-            ret = (loss, acc, term_mask)
-
-            x.batched_states["prev_action"] = gold_actions
-
-            # advance states
-            for i, state in enumerate(x.states):
-                if not state.is_terminated:
-                    open_node = state.open_nodes[0]
-                    gold_action = state.get_gold_action_at(open_node)
-                    state.apply_action(open_node, gold_action)
-            return x, ret
-        else:
-            x.batched_states["prev_action"] = actions
-            for action, state in zip(predicted_actions, x.states):
-                if not state.is_terminated:
-                    state.apply_action(open_node, action)
-                else:
-                    assert(action == state.query_encoder.none_action)
-            return x
+        # _, rules = probs.max(-1)
+        # _, actions_ptr_or_gen = ptr_or_gen.max(-1)
+        # _, ptr_positions = ptr_position_probs.max(-1)
+        # _, actions_gen = gen_probs.max(-1)
+        #
+        #
+        # # predicted actions
+        # predicted_actions = []
+        # for i, (state, ptr_or_gen_e, gen_action_e, copy_action_e) \
+        #         in enumerate(zip(x.states,
+        #                          list(actions_ptr_or_gen.cpu()),
+        #                          list(actions_gen.cpu()),
+        #                          list(ptr_positions.cpu()))):
+        #     if not state.is_terminated:
+        #         open_node = state.open_nodes[0]
+        #         if ptr_or_gen_e.item() == 0:  # gen
+        #             action = state.query_encoder.vocab_actions(gen_action_e.item())
+        #             _rule = action
+        #         else:
+        #             action = f"COPY[{copy_action_e}]"
+        #             _rule = f"<W> -> '{state.inp_tokens[copy_action_e]}'"
+        #         predicted_actions.append(action)
+        #         state.pred_actions.append(action)
+        #         state.pred_rules.append(_rule)
+        #     else:
+        #         predicted_actions.append(state.query_encoder.none_action)
+        #
+        # if x.states[0].has_gold:    # compute loss and accuracies
+        #     gold_actions = torch.zeros_like(actions)
+        #     term_mask = torch.zeros_like(actions).float()
+        #     for i, state in enumerate(x.states):
+        #         if not state.is_terminated:
+        #             open_node = state.open_nodes[0]
+        #             gold_actions[i] = state.query_encoder.vocab_actions[state.get_gold_action_at(open_node)]
+        #             term_mask[i] = 1
+        #         else:
+        #             term_mask[i] = 0
+        #     loss = self.ce(probs, gold_actions)
+        #     acc = gold_actions == actions
+        #     ret = (loss, acc, term_mask)
+        #
+        #     x.batched_states["prev_action"] = gold_actions
+        #
+        #     # advance states
+        #     for i, state in enumerate(x.states):
+        #         if not state.is_terminated:
+        #             open_node = state.open_nodes[0]
+        #             gold_action = state.get_gold_action_at(open_node)
+        #             state.apply_action(open_node, gold_action)
+        #     return x, ret
+        # else:
+        #     x.batched_states["prev_action"] = actions
+        #     for action, state in zip(predicted_actions, x.states):
+        #         if not state.is_terminated:
+        #             state.apply_action(open_node, action)
+        #         else:
+        #             assert(action == state.query_encoder.none_action)
+        #     return x
 
 
 def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
@@ -334,18 +344,23 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
                  smoothing:float=0.,):
     inpemb = torch.nn.Embedding(sentence_encoder.vocab.number_of_ids(), embdim, padding_idx=0)
     inpemb = TokenEmb(inpemb, rare_token_ids=sentence_encoder.vocab.rare_ids, rare_id=1)
-    encoder = PytorchSeq2SeqWrapper(
-        torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
-                      dropout=dropout))
+    encoder = q.LSTMEncoder(embdim, *([hdim]*numlayers), bidir=True, dropout_in=dropout)
+    # encoder = PytorchSeq2SeqWrapper(
+    #     torch.nn.LSTM(embdim, hdim, num_layers=numlayers, bidirectional=True, batch_first=True,
+    #                   dropout=dropout))
     decoder_emb = torch.nn.Embedding(query_encoder.vocab_actions.number_of_ids(), embdim, padding_idx=0)
     decoder_emb = TokenEmb(decoder_emb, rare_token_ids=query_encoder.vocab_actions.rare_ids, rare_id=1)
-    decoder_rnn = [torch.nn.LSTMCell(embdim, hdim)]
+    decoder_rnn = [torch.nn.LSTMCell(embdim + hdim * 2, hdim)]
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
     decoder_out = PtrGenOutput(hdim*3, sentence_encoder.vocab, query_encoder.vocab_actions)
     attention = q.Attention(q.MatMulDotAttComp(hdim, hdim*2))
-    model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention)
+    enctodec = torch.nn.Sequential(
+        torch.nn.Linear(hdim * 2, hdim),
+        torch.nn.Tanh()
+    )
+    model = BasicPtrGenModel(inpemb, encoder, decoder_emb, decoder_rnn, decoder_out, attention, dropout=dropout, enc_to_dec=enctodec)
     dec = TFActionSeqDecoder(model, smoothing=smoothing)
     return dec
 

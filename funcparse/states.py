@@ -35,6 +35,10 @@ class AlignedActionTree(ActionTree):
         else:
             return tree
 
+    def eq(self, other):
+        assert(isinstance(other, ActionTree))
+
+
 
 class FuncTreeState(object):
     """
