@@ -359,7 +359,7 @@ def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
     for i in range(numlayers - 1):
         decoder_rnn.append(torch.nn.LSTMCell(hdim, hdim))
     decoder_rnn = LSTMCellTransition(*decoder_rnn, dropout=dropout)
-    decoder_out = PtrGenOutput(hdim + encoder_dim, sentence_encoder.vocab, query_encoder.vocab_actions)
+    decoder_out = SumPtrGenOutput(hdim + encoder_dim, sentence_encoder.vocab, query_encoder.vocab_actions)
     attention = q.Attention(q.MatMulDotAttComp(hdim, encoder_dim))
     enctodec = torch.nn.Sequential(
         torch.nn.Linear(encoder_dim, hdim),
