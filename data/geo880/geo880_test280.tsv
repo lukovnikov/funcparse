@@ -258,7 +258,7 @@ where is the most populated area of new mexico ?	_answer ( A , _largest ( B , ( 
 how many states have a higher point than the highest point of the state with the largest capital city in the us ?	_answer ( A , _count ( B , ( _state ( B ) , _loc ( C , B ) , _higher ( C , D ) , _place ( C ) , _highest ( D , ( _place ( D ) , _loc ( D , E ) , _state ( E ) , _loc ( F , E ) , _largest ( F , ( _capital ( F ) , _city ( F ) , _loc ( F , G ) , _const ( G , _countryid ( usa ) ) ) ) ) ) ) , A ) )
 how many people live in mississippi ?	_answer ( A , ( _population ( B , A ) , _const ( B , _stateid ( mississippi ) ) ) )
 what is the largest city in smallest state through which the mississippi runs ?	_answer ( A , _largest ( A , ( _city ( A ) , _loc ( A , B ) , _smallest ( B , ( _state ( B ) , _const ( C , _riverid ( mississippi ) ) , _traverse ( C , B ) ) ) ) ) )
-what states have cities named salt lake city ?	_answer ( A , ( _state ( A ) , _loc ( B , A ) , _city ( B ) , _const ( B , _cityid ( ' salt _lake _city ' , _ ) ) ) )
+what states have cities named salt lake city ?	_answer ( A , ( _state ( A ) , _loc ( B , A ) , _city ( B ) , _const ( B , _cityid ( ' salt lake city ' , _ ) ) ) )
 what state has the smallest urban population ?	_answer ( A , _smallest ( B , ( _state ( A ) , _population ( A , B ) ) ) )
 how tall is the highest point in montana ?	_answer ( A , ( _elevation ( B , A ) , _highest ( B , ( _place ( B ) , _loc ( B , C ) , _const ( C , _stateid ( montana ) ) ) ) ) )
 what is the smallest state that the mississippi river runs through ?	_answer ( A , _smallest ( A , ( _state ( A ) , _const ( B , _riverid ( mississippi ) ) , _river ( B ) , _traverse ( B , A ) ) ) )
