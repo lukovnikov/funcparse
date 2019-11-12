@@ -374,6 +374,7 @@ def run(lr=0.001,
         batsize=20,
         epochs=30,
         embdim=100,
+        encdim=200,
         numlayers=1,
         dropout=.2,
         wreg=1e-6,
@@ -409,7 +410,7 @@ def run(lr=0.001,
     # print("input graph")
     # print(batch.batched_states)
 
-    tfdecoder = create_model(embdim=embdim, hdim=embdim, dropout=dropout, numlayers=numlayers,
+    tfdecoder = create_model(embdim=embdim, hdim=encdim, dropout=dropout, numlayers=numlayers,
                              sentence_encoder=ds.sentence_encoder, query_encoder=ds.query_encoder,
                              smoothing=smoothing, feedatt=feedatt)
     # beamdecoder = BeamActionSeqDecoder(tfdecoder.model, beamsize=beamsize, maxsteps=50)
