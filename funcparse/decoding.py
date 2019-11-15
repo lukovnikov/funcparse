@@ -244,21 +244,27 @@ class LSTMCellTransition(TransitionModel):
         self.cells = torch.nn.ModuleList(cells)
         self.dropout = torch.nn.Dropout(dropout)
 
+    def get_init_state(self, batsize, device):
+        states = {}
+        for i in range(len(self.cells)):
+            states[f"{i}"] = {}
+            states[f"{i}"]["h.dropout"] = self.dropout(
+                torch.ones(batsize,
+                self.cells[i].hidden_size,
+                device=device))
+            states[f"{i}"]["c.dropout"] = self.dropout(
+                torch.ones_like(states[f"{i}"]["h.dropout"])
+            )
+            states[f"{i}"]["h"] = torch.zeros_like(states[f"{i}"]["h.dropout"])
+            states[f"{i}"]["c"] = torch.zeros_like(states[f"{i}"]["h.dropout"])
+        return states
+
     def forward(self, inp:torch.Tensor, states:Dict[str,torch.Tensor]):
         x = inp
         for i in range(len(self.cells)):
             _x = self.dropout(x)
-            if f"{i}" not in states:
-                x, c = self.cells[i](_x, None)
-                states[f"{i}"] = {}
-                # intialize dropout
-                h_dropout_mask = self.dropout(torch.ones(inp.size(0), self.cells[i].hidden_size, device=inp.device))
-                c_dropout_mask = self.dropout(torch.ones_like(h_dropout_mask))
-                states[f"{i}"]["h.dropout"] = h_dropout_mask
-                states[f"{i}"]["c.dropout"] = c_dropout_mask
-            else:
-                x, c = self.cells[i](_x, (states[f"{i}"]["h"] * states[f"{i}"]["h.dropout"],
-                                          states[f"{i}"]["c"] * states[f"{i}"]["c.dropout"]))
+            x, c = self.cells[i](_x, (states[f"{i}"]["h"] * states[f"{i}"]["h.dropout"],
+                                      states[f"{i}"]["c"] * states[f"{i}"]["c.dropout"]))
             states[f"{i}"]["h"] = x
             states[f"{i}"]["c"] = c
         return x

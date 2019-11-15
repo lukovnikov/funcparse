@@ -235,7 +235,8 @@ def get_dataloaders(ds:GeoQueryDataset, batsize:int=5):
 
 
 class BasicPtrGenModel(TransitionModel):
-    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn, out_lin, att, dropout=0., enc_to_dec=None, feedatt=False, **kw):
+    def __init__(self, inp_emb, inp_enc, out_emb, out_rnn:LSTMCellTransition,
+                 out_lin, att, dropout=0., enc_to_dec=None, feedatt=False, **kw):
         super(BasicPtrGenModel, self).__init__(**kw)
         self.inp_emb, self.inp_enc = inp_emb, inp_enc
         self.out_emb, self.out_rnn, self.out_lin = out_emb, out_rnn, out_lin
@@ -264,8 +265,9 @@ class BasicPtrGenModel(TransitionModel):
         emb = self.out_emb(x.batched_states["prev_action"])
 
         if "rnn" not in x.batched_states:
-            # TODO: set final_enc as initial state of top layer of decoder
-            x.batched_states["rnn"] = {}
+            init_rnn_state = self.out_rnn.get_init_state(emb.size(0), emb.device)
+            init_rnn_state[f"{len(init_rnn_state)-1}"]["c"] = final_enc
+            x.batched_states["rnn"] = init_rnn_state
 
         # DONE: concat previous attention summary to emb
         if "prev_summ" not in x.batched_states:
