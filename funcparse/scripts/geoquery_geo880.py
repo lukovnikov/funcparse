@@ -437,7 +437,7 @@ def run(lr=0.001,
     vlosses = [q.LossWrapper(q.SelectedLinearLoss(x, reduction=None), name=x) for x in ["seq_acc", "tree_acc"]]
 
     # 4. define optim
-    optim = q.AdamW(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
+    optim = torch.optim.Adam(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
     # optim = torch.optim.SGD(tfdecoder.parameters(), lr=lr, weight_decay=wreg)
 
     # lr schedule
