@@ -4,12 +4,134 @@ import torch
 import qelos as q
 import numpy as np
 
-from funcparse.states import FuncTreeStateBatch, StateBatch
+from funcparse.states import FuncTreeStateBatch, StateBatch, BasicStateBatch
 
 
 class TransitionModel(torch.nn.Module): pass
 
 
+# region tokenseq decoders
+class TFTokenSeqDecoder(torch.nn.Module):
+    def __init__(self, model:TransitionModel, smoothing=0., **kw):
+        super(TFTokenSeqDecoder, self).__init__(**kw)
+        self.model = model
+        if smoothing > 0:
+            self.loss = q.SmoothedCELoss(reduction="none", ignore_index=0, mode="probs")
+        else:
+            self.loss = q.CELoss(reduction="none", ignore_index=0, mode="probs")
+
+    def forward(self, fsb:BasicStateBatch):
+        states = fsb.unbatch()
+        numex = len(states)
+        for state in states:
+            state.start_decoding()
+
+        all_terminated = False
+
+        step_probs = []
+        step_losses = []
+        step_accs = []  # 1s for correct ones, 0s for incorrect ones, -1 for masked ones
+        step_terms = []
+
+        # main loop
+        t = 0
+        while not all_terminated:
+            fsb.batch()
+            probs, fsb = self.model(fsb)
+            states = fsb.unbatch()
+            # find gold rules
+            gold_tokens = torch.zeros(numex, device=probs.device, dtype=torch.long)
+            for i, state in enumerate(states):
+                if t < len(state.gold_tokens):
+                    gold_tok_str = state.gold_tokens[t]
+                    gold_tok = state.query_encoder.vocab[gold_tok_str]
+                    gold_tokens[i] = gold_tok
+                    state.apply_token(gold_tok_str)
+                    # assert(gold_tok == state.gold_tensor[i])
+                else:
+                    gold_tokens[i] = 0
+            term_mask = gold_tokens != 0
+            # compute loss
+            step_loss = self.loss(probs, gold_tokens)
+            # compute accuracy
+            _, pred_tokens = probs.max(-1)
+            step_acc = (pred_tokens == gold_tokens).float()
+            step_losses.append(step_loss)
+            step_accs.append(step_acc)
+            step_terms.append(term_mask)
+            all_terminated = bool(torch.all(term_mask == 0).item())
+            t += 1
+
+        # mask = torch.stack([step_terms[0]]+step_terms, 0).transpose(1, 0)[:, :-1]
+        mask = torch.stack(step_terms, 0).transpose(0, 1)
+        # aggregate losses
+        losses = torch.stack(step_losses, 0).transpose(1, 0)
+        losses = losses * mask.float()
+        loss = losses.sum(-1).mean()
+
+        # aggregate accuracies
+        step_accs = torch.stack(step_accs, 0).transpose(1, 0)
+        elemacc = step_accs.float().sum() / mask.float().sum()
+        seqacc = (step_accs.bool() | ~mask.bool()).all(-1).float().mean()
+
+        return {"output": fsb, "loss": loss, "any_acc": elemacc, "seq_acc": seqacc}
+
+
+class GreedyTokenSeqDecoder(torch.nn.Module):
+    def __init__(self, model:TransitionModel, maxsteps=25, **kw):
+        super(GreedyTokenSeqDecoder, self).__init__(**kw)
+        self.model = model
+        self.maxsteps = maxsteps
+
+    def forward(self, fsb:BasicStateBatch):
+        states = fsb.unbatch()
+        hasgold = []
+        numex = len(states)
+
+        for state in states:
+            hasgold.append(state.has_gold)
+            state.start_decoding()
+            state.use_gold = False
+
+        assert(all([_hg is True for _hg in hasgold]) or all([_hg is False for _hg in hasgold]))
+        hasgold = hasgold[0]
+
+        all_terminated = False
+
+        step = 0
+        # main loop
+        while not all_terminated and step < self.maxsteps:
+            all_terminated = True
+            fsb.batch()
+            probs, fsb = self.model(fsb)
+            _, pred_token_ids = probs.max(-1)
+            pred_token_ids = list(pred_token_ids.cpu().numpy())
+            states = fsb.unbatch()
+            for i, state in enumerate(states):
+                if not state.is_terminated:
+                    state.apply_token(state.query_encoder.vocab(pred_token_ids[i]))
+                    all_terminated = False
+            step += 1
+
+        if hasgold:     # compute accuracies (seq and tree) with top scoring states
+            seqaccs = 0
+            treeaccs = 0
+            # elemaccs = 0
+            total = 0
+            for out_state in fsb.states:
+                # out_state.out_tree.simplify()
+                seqaccs += float(out_state.out_rules == out_state.gold_rules)
+                treeaccs += out_state.out_tree.eq(out_state.gold_tree)
+                total += 1
+            return {"output": fsb,
+                    "seq_acc": seqaccs/total, "tree_acc": treeaccs/total}
+        else:
+            return {"output": fsb}
+
+# endregion
+
+
+# region actionseq decoders
 class TFActionSeqDecoder(torch.nn.Module):
     def __init__(self, model:TransitionModel, smoothing=0., **kw):
         super(TFActionSeqDecoder, self).__init__(**kw)
@@ -21,10 +143,9 @@ class TFActionSeqDecoder(torch.nn.Module):
 
     def forward(self, fsb:FuncTreeStateBatch):
         states = fsb.unbatch()
-        numex = 0
+        numex = len(states)
         for state in states:
             state.start_decoding()
-            numex += 1
 
         all_terminated = False
 
@@ -40,16 +161,15 @@ class TFActionSeqDecoder(torch.nn.Module):
             states = fsb.unbatch()
             # find gold rules
             gold_rules = torch.zeros(numex, device=probs.device, dtype=torch.long)
-            term_mask = torch.zeros_like(gold_rules).float()
+            term_mask = torch.zeros_like(gold_rules).float() + 1
             for i, state in enumerate(states):
                 if not state.is_terminated:
                     open_node = state.open_nodes[0]
                     gold_rule_str = state.get_gold_action_at(open_node)
                     gold_rules[i] = state.query_encoder.vocab_actions[gold_rule_str]
                     state.apply_action(open_node, gold_rule_str)
-            for i, state in enumerate(states):
-                if not state.is_terminated:
-                    term_mask[i] = 1
+                else:
+                    term_mask[i] = 0
             # compute loss
             step_loss = self.loss(probs, gold_rules)
             # compute accuracy
@@ -60,7 +180,7 @@ class TFActionSeqDecoder(torch.nn.Module):
             step_terms.append(term_mask)
             all_terminated = bool(torch.all(term_mask == 0).item())
 
-        mask = torch.stack([step_terms[0]]+step_terms, 0).transpose(1, 0)[:, :-1]
+        mask = torch.stack(step_terms, 0).transpose(1, 0)
         # aggregate losses
         losses = torch.stack(step_losses, 0).transpose(1, 0)
         losses = losses * mask.float()
@@ -118,6 +238,7 @@ class GreedyActionSeqDecoder(torch.nn.Module):
             # elemaccs = 0
             total = 0
             for out_state in fsb.states:
+                # out_state.out_tree.simplify()
                 seqaccs += float(out_state.out_rules == out_state.gold_rules)
                 treeaccs += out_state.out_tree.eq(out_state.gold_tree)
                 total += 1
@@ -236,8 +357,10 @@ class BeamActionSeqDecoder(torch.nn.Module):
         else:
             return {"output": all_out_states, "probs": all_out_probs}
 
+# endregion
 
 
+# region transition models
 class LSTMCellTransition(TransitionModel):
     def __init__(self, *cells:torch.nn.LSTMCell, dropout:float=0., **kw):
         super(LSTMCellTransition, self).__init__(**kw)
@@ -268,6 +391,8 @@ class LSTMCellTransition(TransitionModel):
             states[f"{i}"]["h"] = x
             states[f"{i}"]["c"] = c
         return x
+
+# endregion
 
 
 

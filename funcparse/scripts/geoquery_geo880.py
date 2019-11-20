@@ -266,6 +266,7 @@ class BasicPtrGenModel(TransitionModel):
 
         if "rnn" not in x.batched_states:
             init_rnn_state = self.out_rnn.get_init_state(emb.size(0), emb.device)
+            # uncomment next line to initialize decoder state with last state of encoder
             # init_rnn_state[f"{len(init_rnn_state)-1}"]["c"] = final_enc
             x.batched_states["rnn"] = init_rnn_state
 

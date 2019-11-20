@@ -3,7 +3,7 @@ from typing import Set
 
 import torch
 
-from funcparse.states import FuncTreeStateBatch
+from funcparse.states import FuncTreeStateBatch, BasicStateBatch
 from funcparse.vocab import SentenceEncoder, FuncQueryEncoder, Vocab
 
 
@@ -128,6 +128,35 @@ class SumPtrGenOutput(torch.nn.Module):
             gen_scores = gen_scores + -1e6 * actionmask.float() #torch.log(actionmask.float())
         out_probs = self.sm(out_scores)
         return out_probs, None, gen_scores, attn_scores
+
+
+class BasicGenOutput(torch.nn.Module):
+    def __init__(self, h_dim:int, inp_vocab:Vocab=None, out_vocab:Vocab=None, **kw):
+        super(BasicGenOutput, self).__init__(**kw)
+        self.gen_lin = torch.nn.Linear(h_dim, out_vocab.number_of_ids(), bias=True)
+        self.sm = torch.nn.Softmax(-1)
+        self.logsm = torch.nn.LogSoftmax(-1)
+
+        self.inp_vocab, self.out_vocab = inp_vocab, out_vocab
+
+        # rare output tokens
+        self.rare_token_ids = out_vocab.rare_ids
+        rare_id = 1
+        if len(self.rare_token_ids) > 0:
+            out_map = torch.arange(self.out_vocab.number_of_ids())
+            for rare_token_id in self.rare_token_ids:
+                out_map[rare_token_id] = rare_id
+            self.register_buffer("out_map", out_map)
+        else:
+            self.register_buffer("out_map", None)
+
+    def forward(self, x:torch.Tensor, statebatch:BasicStateBatch, attn_scores:torch.Tensor):
+        # - generation probs
+        gen_probs = self.gen_lin(x)
+        if self.out_map is not None:
+            gen_probs = gen_probs.index_select(1, self.out_map)
+        gen_probs = self.sm(gen_probs)
+        return gen_probs
 
 
 class PtrGenOutput(torch.nn.Module):

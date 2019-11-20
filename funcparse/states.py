@@ -13,6 +13,7 @@ from funcparse.vocab import SentenceEncoder, FuncQueryEncoder
 
 class AlignedActionTree(ActionTree):
     orderless = ["and", "or"]
+    singlechildcollapse = ["and", "or"]
     def __init__(self, node, children=None):
         super(AlignedActionTree, self).__init__(node, children=children)
         self._align = None
@@ -35,6 +36,14 @@ class AlignedActionTree(ActionTree):
             return ret
         else:
             return tree
+
+    def simplify(self):
+        for i in range(len(self)):
+            child = self[i]
+            if child._label in self.singlechildcollapse and len(child) == 2:
+                self[i] = child[0]
+        for child in self:
+            child.simplify()
 
     def eq(self, other):
         assert(isinstance(other, ActionTree))
@@ -75,9 +84,6 @@ class AlignedActionTree(ActionTree):
                 return False
         else:
             return all([selfchild.eq(otherchild) for selfchild, otherchild in zip(self, other)])
-
-
-
 
 
 class FuncTreeState(object):
@@ -367,6 +373,107 @@ class FuncTreeStateBatch(StateBatch):
         return ret
 
     def new(self, states:List[FuncTreeState]):
+        ret = type(self)(states, nn_batcher=self.nn_batcher)
+        return ret
+
+
+# BASIC STATE
+
+class BasicState(object):
+    """
+    State object containing
+    """
+    def __init__(self, inp:str, out:str=None,
+                 sentence_encoder:SentenceEncoder=None,
+                 query_encoder:SentenceEncoder=None, **kw):
+        super(BasicState, self).__init__(**kw)
+        self.inp_string, self.out_string = inp, out
+        self.sentence_encoder, self.query_encoder = sentence_encoder, query_encoder
+        self.inp_tensor = None
+        if sentence_encoder is not None:
+            self.inp_tensor, self.inp_tokens = sentence_encoder.convert(inp, return_what="tensor,tokens")
+
+        self.has_gold = False
+        self.use_gold = False
+        if out is not None:
+            self.has_gold = True
+            self.use_gold = self.has_gold
+            if query_encoder is not None:
+                self.gold_tensor, self.gold_tokens = query_encoder.convert(out, return_what="tensor,tokens")
+        self.out_tokens = None
+        if self.inp_tensor is not None:
+            self.nn_states = {"inp_tensor": self.inp_tensor} # put NN states here
+
+    def make_copy(self):
+        ret = type(self)(self.inp_string, self.out_string)
+        for k, v in self.__dict__.items():
+            ret.__dict__[k] = deepcopy(v) if k not in ["sentence_encoder", "query_encoder"] else v
+        return ret
+
+    def reset(self):
+        self.nn_states = {"inp_tensor": self.inp_tensor}
+        self.out_tokens = None
+        return self
+
+    @property
+    def is_terminated(self):
+        return False # TODO
+
+    def start_decoding(self):
+        self.reset()
+        self.out_tokens = []
+        # initialize prev_action
+        self.nn_states["prev_token"] = torch.tensor(self.query_encoder.vocab[self.query_encoder.vocab.starttoken],
+                                                     device=self.nn_states["inp_tensor"].device, dtype=torch.long)
+
+    def apply_token(self, token:str):
+        self.nn_states["prev_token"] = torch.tensor(self.query_encoder.vocab[token],
+                                                     device=self.nn_states["inp_tensor"].device, dtype=torch.long)
+
+    def to(self, device):
+        self.nn_states = q.recmap(self.nn_states, lambda x: x.to(device))
+        for k, v in self.__dict__.items():
+            if isinstance(v, torch.Tensor):
+                setattr(self, k, v.to(device))
+        return self
+
+    @classmethod
+    def batch(self, states:List, nn_batcher=None):
+        return BasicStateBatch(states, nn_batcher=nn_batcher)
+
+
+class BasicStateBatch(StateBatch):
+    def __init__(self, states:List[FuncTreeState], nn_batcher:NNStateBatcher=DefaultNNStateBatcher(), **kw):
+        super(BasicStateBatch, self).__init__(**kw)
+        self.states = [state.make_copy() for state in states]
+        self.batched_states = None
+        self.nn_batcher = nn_batcher
+        self.batch()
+
+    def batch(self):    # update batched_states from states
+        nnstates = [state.nn_states for state in self.states]
+        self.batched_states = self.nn_batcher.batch(nnstates)
+
+    def unbatch(self):  # update state.g's from batched_graph
+        nn_states = self.nn_batcher.unbatch(self.batched_states)
+        for state, nn_state in zip(self.states, nn_states):
+            state.nn_states = nn_state
+        return self.states
+
+    def to(self, device):
+        for state in self.states:
+            state.to(device)
+        self.batched_states = q.recmap(self.batched_states, lambda x: x.to(device))
+        return self
+
+    def __len__(self):
+        return len(self.states)
+
+    def make_copy(self):
+        ret = type(self)(self.states, self.nn_batcher)
+        return ret
+
+    def new(self, states:List[BasicState]):
         ret = type(self)(states, nn_batcher=self.nn_batcher)
         return ret
 

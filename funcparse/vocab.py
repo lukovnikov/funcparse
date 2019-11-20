@@ -14,8 +14,10 @@ class _Vocab(object):
 class Vocab(_Vocab):
     padtoken = "@PAD@"
     unktoken = "@UNK@"
-    def __init__(self, padid:int=0, unkid:int=1, **kw):
+    starttoken = "@START@"
+    def __init__(self, padid:int=0, unkid:int=1, startid:int=2, **kw):
         self.D = {self.padtoken: padid, self.unktoken: unkid}
+        self.D[self.starttoken] = startid
         self.counts = {k: np.infty for k in self.D.keys()}
         self.rare_tokens = set()
         self.rare_ids = set()
