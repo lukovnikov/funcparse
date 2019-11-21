@@ -233,6 +233,8 @@ class PtrGenOutput(torch.nn.Module):
                 actionmask.fill_(1)
             actionmasks.append(actionmask)
         actionmask = torch.stack(actionmasks, 0)
+        if self.training:       # !!!! removing action mask stuff during training !!! probably want to put back
+            actionmask = None
         # endregion
 
         # - point or generate probs

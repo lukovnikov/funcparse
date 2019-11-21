@@ -285,65 +285,6 @@ class BasicPtrGenModel(TransitionModel):
         probs, ptr_or_gen, gen_probs, ptr_position_probs = self.out_lin(enc, x, scores)
         return probs, x
 
-        # _, rules = probs.max(-1)
-        # _, actions_ptr_or_gen = ptr_or_gen.max(-1)
-        # _, ptr_positions = ptr_position_probs.max(-1)
-        # _, actions_gen = gen_probs.max(-1)
-        #
-        #
-        # # predicted actions
-        # predicted_actions = []
-        # for i, (state, ptr_or_gen_e, gen_action_e, copy_action_e) \
-        #         in enumerate(zip(x.states,
-        #                          list(actions_ptr_or_gen.cpu()),
-        #                          list(actions_gen.cpu()),
-        #                          list(ptr_positions.cpu()))):
-        #     if not state.is_terminated:
-        #         open_node = state.open_nodes[0]
-        #         if ptr_or_gen_e.item() == 0:  # gen
-        #             action = state.query_encoder.vocab_actions(gen_action_e.item())
-        #             _rule = action
-        #         else:
-        #             action = f"COPY[{copy_action_e}]"
-        #             _rule = f"<W> -> '{state.inp_tokens[copy_action_e]}'"
-        #         predicted_actions.append(action)
-        #         state.pred_actions.append(action)
-        #         state.pred_rules.append(_rule)
-        #     else:
-        #         predicted_actions.append(state.query_encoder.none_action)
-        #
-        # if x.states[0].has_gold:    # compute loss and accuracies
-        #     gold_actions = torch.zeros_like(actions)
-        #     term_mask = torch.zeros_like(actions).float()
-        #     for i, state in enumerate(x.states):
-        #         if not state.is_terminated:
-        #             open_node = state.open_nodes[0]
-        #             gold_actions[i] = state.query_encoder.vocab_actions[state.get_gold_action_at(open_node)]
-        #             term_mask[i] = 1
-        #         else:
-        #             term_mask[i] = 0
-        #     loss = self.ce(probs, gold_actions)
-        #     acc = gold_actions == actions
-        #     ret = (loss, acc, term_mask)
-        #
-        #     x.batched_states["prev_action"] = gold_actions
-        #
-        #     # advance states
-        #     for i, state in enumerate(x.states):
-        #         if not state.is_terminated:
-        #             open_node = state.open_nodes[0]
-        #             gold_action = state.get_gold_action_at(open_node)
-        #             state.apply_action(open_node, gold_action)
-        #     return x, ret
-        # else:
-        #     x.batched_states["prev_action"] = actions
-        #     for action, state in zip(predicted_actions, x.states):
-        #         if not state.is_terminated:
-        #             state.apply_action(open_node, action)
-        #         else:
-        #             assert(action == state.query_encoder.none_action)
-        #     return x
-
 
 def create_model(embdim=100, hdim=100, dropout=0., numlayers:int=1,
                  sentence_encoder:SentenceEncoder=None, query_encoder:FuncQueryEncoder=None,
